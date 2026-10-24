@@ -9,7 +9,8 @@
 
     var $ = function (s) { return document.querySelector(s); };
     var ROWS = 8, COLS = 12;  // 96-well plates only: that is what the camera tracker knows
-    var PALETTE = ["#2F6FDE", "#E5484D", "#F5A524", "#2FA36B", "#8E5CD9", "#17A2B8", "#E26FB0", "#7A8B99"];
+    // Pastel palette, but saturated enough to read clearly on the plate
+    var PALETTE = ["#8EC5FF", "#FF9EB5", "#FFB57A", "#7EDDB0", "#B79CF2", "#FFE066", "#6FD6E0", "#B4BEC9"];
     var TITLES = { wrong: "Wrong compound", unplanned: "Unplanned well", duplicate: "Duplicate drop", order: "Out of order", early: "Too early" };
     var LABELS = { ok: "Match", wrong: "Wrong compound", unplanned: "Unplanned", duplicate: "Duplicate", order: "Out of order", early: "Too early" };
     var SOURCES = { camera: "Camera", test: "Test", manual: "Manual", simulator: "Simulator" };
@@ -281,6 +282,8 @@
         var q = S.query.trim().toLowerCase();
         var arr = S.compounds.filter(function (c) {
             return !q || c.name.toLowerCase().indexOf(q) > -1 || c.tag.toLowerCase().indexOf(q) > -1;
+        }).sort(function (a, b) {  // A to Z, ignoring case; "Std 2" before "Std 10"
+            return a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true });
         });
         if (!arr.length) {
             list.appendChild(el("li", "emptyNote", S.compounds.length ? "No compounds match your search." : "No compounds yet. Add one below."));
@@ -290,14 +293,13 @@
             var li = el("li", "cardRow"), b = el("button", "card");
             b.type = "button";
             b.setAttribute("aria-pressed", c.id === S.activeId ? "true" : "false");
-            var sw = el("span", "cardColor", c.tag);
+            var sw = el("span", "cardColor");
             sw.style.background = c.color;
-            sw.style.color = textOn(c.color);
             var n = (counts[c.id] || [0, 0])[1], d = (counts[c.id] || [0, 0])[0];
+            b.title = c.name + (c.tag ? " (" + c.tag + ")" : "");
             b.appendChild(sw);
             b.appendChild(el("span", "cardName", c.name));
-            b.appendChild(el("span", "cardVol", fmtVol(c.volumeUl)));
-            b.appendChild(el("span", "cardCount", S.view === "run" ? d + " of " + n + " dispensed" : n + (n === 1 ? " well" : " wells")));
+            b.appendChild(el("span", "cardCount", fmtVol(c.volumeUl) + " \u00B7 " + (S.view === "run" ? d + " of " + n + " dispensed" : n + (n === 1 ? " well" : " wells"))));
             if (S.view === "run" && n) {
                 var m = el("div", "cardMini"), i = el("i");
                 i.style.width = (100 * d / n) + "%";
@@ -324,9 +326,8 @@
     }
     function renderEditorState() {
         var c = byId(S.editingId);
-        $("#editorTitle").textContent = c ? "Edit " + c.name : "Add compound";
+        $("#editorTitle").textContent = c ? "Edit " + c.name : "New compound";
         $("#saveBtn").textContent = c ? "Save" : "Add";
-        $("#cancelBtn").hidden = !c;
     }
     function clearEditor() {
         $("#nameField").value = "";
@@ -334,17 +335,33 @@
         $("#volField").value = 8;
         setColor(nextColor());
     }
+    // The add/edit form lives in a dialog, so the compound list gets the whole left column
+    function openEditor() {
+        var d = $("#compoundDialog");
+        if (!d.open) d.showModal();
+        $("#nameField").focus();
+    }
     function startEditing(c) {
         S.editingId = c.id;
         loadEditor(c);
         renderEditorState();
-        $("#nameField").focus();
+        openEditor();
+    }
+    function startAdding() {
+        S.editingId = null;
+        clearEditor();
+        renderEditorState();
+        openEditor();
     }
     function stopEditing() {
         S.editingId = null;
         clearEditor();
         renderEditorState();
+        if ($("#compoundDialog").open) $("#compoundDialog").close();
     }
+    $("#newCompoundBtn").onclick = startAdding;
+    $("#compoundDialog").addEventListener("close", function () { if (S.editingId != null) stopEditing(); });
+    $("#editor").addEventListener("keydown", function (e) { if (e.key === "Enter" && e.target.tagName === "INPUT") $("#saveBtn").click(); });
 
     /* ---------- the "..." menu on each compound ---------- */
     var menuFor = null;
@@ -407,11 +424,11 @@
             applyState(res.state);
             S.activeId = res.compound.id;
             postActive();
-            clearEditor();
+            stopEditing();
             renderAll();
             toast("Added " + res.compound.name + ".");
-            var l = $("#compoundList");
-            l.scrollTop = l.scrollHeight;
+            var sel = $('#compoundList [aria-pressed="true"]');  // the list is A-Z: show the new one wherever it landed
+            if (sel) sel.scrollIntoView({ block: "nearest" });
         }).catch(fail);
     };
     $("#cancelBtn").onclick = stopEditing;
@@ -492,12 +509,20 @@
         updateCells();
     }
     function fitGrid() {
-        var R = ROWS, C = COLS, pad = 14, gap = 3, hd = 26;
-        var W = wrap.clientWidth - 24, H = wrap.clientHeight - 24;
+        var R = ROWS, C = COLS, pad = 8, gap = 3, hd = 20;  // keep in sync with .plate in style.css
+        // Plan: toolbar above + selection bar below. Run: tip bar above (same height) + the same space below.
+        // Same space taken in both tabs, so the plate is exactly the same size in Plan and Run.
+        // Plan: 92px (the floating Confirm bar at the bottom + the same space on top, so the plate stays centered).
+        // Run: the 76px run strip sits above the plate area, so only 16px more: the plate is the same size in both tabs.
+        var strip = S.view === "run" ? $(".runBar").offsetHeight : 0;
+        var reserve = S.view === "plan" ? 92 : S.view === "run" ? Math.max(16, 92 - strip) : 0;
+        var W = wrap.clientWidth - 8, H = wrap.clientHeight - 8 - reserve;  // .plateWrap padding 4px
+        // Narrow windows scroll (see style.css), so there the plate is sized by the width only
+        if (window.matchMedia("(max-width: 760px)").matches) H = Infinity;
         var cell = Math.floor(Math.min((W - 2 * pad - hd - gap * C) / C, (H - 2 * pad - hd - gap * R) / R));
-        cell = Math.max(12, Math.min(76, cell));
+        cell = Math.max(12, Math.min(120, cell));  // big plates are easier to read from the bench
         plate.style.setProperty("--cell", cell + "px");
-        plate.classList.toggle("showLabels", cell >= 30);
+        plate.classList.toggle("showLabels", cell >= 22);
     }
     function dragWells() {
         if (!drag) return [];
@@ -508,7 +533,15 @@
         for (var r = ra; r <= rb; r++) for (var c = ca; c <= cb; c++) out.push(wid(r, c));
         return out;
     }
+    var STRIPES = "repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.8) 0 3px, transparent 3px 7px)";  // "still to add" hatching
     function alpha(hex, a) { var o = rgb(hex); return "rgba(" + o.r + "," + o.g + "," + o.b + "," + a + ")"; }
+    // Sets p.pct on each part: its volume as a % of the well's total (equal shares if no volumes are set)
+    function sharePct(parts) {
+        var total = parts.reduce(function (s, p) { return s + Math.max(0, +p.c.volumeUl || 0); }, 0);
+        parts.forEach(function (p) { p.pct = total > 0 ? 100 * Math.max(0, +p.c.volumeUl || 0) / total : 100 / parts.length; });
+        return parts;
+    }
+    function fmtPct(p) { return (p >= 10 || p === 0 ? Math.round(p) : Math.round(p * 10) / 10) + "%"; }
     function updateCells() {
         var sel = {};
         dragWells().forEach(function (id) { sel[id] = 1; });
@@ -525,12 +558,22 @@
                 return { i: i, c: c, done: stepDone(i, id) };
             });
             var allDone = parts.length && parts.every(function (p) { return p.done; });
+            sharePct(parts);
             if (parts.length) {
-                var cols = parts.map(function (p) { return inRun && !p.done ? alpha(p.c.color, 0.3) : p.c.color; });
-                var n = cols.length, stops = cols.map(function (col, k) {
-                    return col + " " + (100 * k / n) + "% " + (100 * (k + 1) / n) + "%";
+                // Pie chart: each compound's slice is its share of the well's total volume.
+                // Run tab: an added slice is solid; a slice still to add is striped (white hatching over its color).
+                // Three layers: solid added slices (top) / white stripes / every slice's color (bottom).
+                var n = parts.length, acc = 0, solid = [], base = [];
+                parts.forEach(function (p, k) {
+                    var a = acc, b = k === n - 1 ? 100 : (acc += p.pct);
+                    var range = " " + a + "% " + b + "%";
+                    solid.push((inRun && !p.done ? "transparent" : p.c.color) + range);
+                    base.push(p.c.color + range);
                 });
-                w.style.background = n === 1 ? cols[0] : "linear-gradient(180deg, " + stops.join(", ") + ")";
+                var anyPending = inRun && parts.some(function (p) { return !p.done; });
+                w.style.background = !anyPending
+                    ? (n === 1 ? parts[0].c.color : "conic-gradient(" + base.join(", ") + ")")
+                    : "conic-gradient(" + solid.join(", ") + "), " + STRIPES + ", conic-gradient(" + base.join(", ") + ")";
                 w.style.color = n === 1 && !(inRun && !parts[0].done) ? textOn(parts[0].c.color) : "";
                 w.style.borderColor = "transparent";
             } else { w.style.background = ""; w.style.color = ""; w.style.borderColor = ""; }
@@ -546,11 +589,8 @@
             w.classList.toggle("hl", hl.indexOf(id) > -1);
             w.style.setProperty("--stage", S.tool === "paint" && stagedC ? stagedC.color : "var(--alarm)");
             w.textContent = "";
-            if (showLbl && parts.length && !(inRun && allDone)) {
-                if (parts.length <= 3) parts.forEach(function (p) { w.appendChild(el("span", "wellTag", p.c.tag)); });
-                else w.appendChild(el("span", "wellTag", parts.length + "\u00D7"));
-            }
             var tm = inRun ? runningTimerOf(id) : null;
+            // No text in wells: colors only, named in the compound list (hover a well for names and %)
             w.classList.toggle("timing", !!tm);
             if (tm) {  // countdown ring on the well's edge + the time left
                 var tr = el("i", "timerRing");
@@ -562,7 +602,7 @@
             w.classList.toggle("tipHere", !!tipHere);
             if (tipHere) { var ring = el("i", "tipRing"); ring.dataset.state = tipState(); w.appendChild(ring); }
             w.title = id + (parts.length ? "\n" + parts.map(function (p, k) {
-                return (k + 1) + ". " + p.c.name + " \u00B7 " + fmtVol(p.c.volumeUl) + (p.done ? "  \u2713" : "");
+                return (k + 1) + ". " + p.c.name + " \u00B7 " + fmtVol(p.c.volumeUl) + " (" + fmtPct(p.pct) + ")" + (p.done ? "  \u2713" : "");
             }).join("\n") : "  (empty)");
         });
         $("#plateShadow").classList.toggle("alarmed", !!S.run.alarm);
@@ -649,22 +689,26 @@
         renderAll();
     };
     function renderStage() {
-        var n = stagedWells().length, bar = $("#stageBar"), c = byId(S.activeId);
-        bar.hidden = !n || S.view !== "plan";
-        if (bar.hidden) return;
+        // The bar always takes its space in the Plan tab (never hidden), so the plate does not
+        // resize when wells are selected or confirmed. With nothing selected it shows a hint.
+        var n = stagedWells().length, c = byId(S.activeId);
+        $("#stageCancel").disabled = !n;
+        $("#stageConfirm").disabled = !n;
+        $("#stageBar").classList.toggle("idle", !n);
         var t = $("#stageText");
         t.replaceChildren();
-        if (S.tool === "erase") t.appendChild(el("span", null, "Clear everything from " + n + (n === 1 ? " well" : " wells")));
+        if (!n) t.appendChild(el("span", null, ""));
+        else if (S.tool === "erase") t.appendChild(el("span", null, "Clear everything from " + n + (n === 1 ? " well" : " wells")));
         else if (c) {
-            var tag = el("span", "tipTag", c.tag);
+            var tag = el("i", "dot");
             tag.style.background = c.color;
-            tag.style.color = textOn(c.color);
-            t.appendChild(el("span", null, "Add "));
+            t.appendChild(el("b", null, n + (n === 1 ? " well" : " wells")));
+            t.appendChild(el("span", "muted", "\u2190"));
             t.appendChild(tag);
-            t.appendChild(el("b", null, " " + c.name + " "));
-            t.appendChild(el("span", null, "to " + n + (n === 1 ? " well" : " wells") + " as step " + stepNumberFor(c.id)));
-        } else t.appendChild(el("span", null, "Select a compound on the left"));
-        $("#stageConfirm").textContent = S.tool === "erase" ? "Clear wells" : "Confirm";
+            t.appendChild(el("span", null, c.name));
+            t.appendChild(el("span", "muted", "step " + stepNumberFor(c.id)));
+        } else t.appendChild(el("span", null, "Pick a compound on the left"));
+        $("#stageConfirm").textContent = S.tool === "erase" ? "Clear wells" : "Add to wells";
         $("#stageConfirm").className = "btn " + (S.tool === "erase" ? "dangerFill" : "primary");
     }
     function stepNumberFor(cid) {
@@ -690,9 +734,8 @@
                 body.appendChild(el("span", "stepName", txt));
             } else {
                 var c = byId(st.compoundId) || { tag: "?", color: "#999999", name: "?" };
-                var tag = el("span", "tipTag", c.tag);
+                var tag = el("i", "dot");
                 tag.style.background = c.color;
-                tag.style.color = textOn(c.color);
                 body.appendChild(tag);
                 body.appendChild(el("span", "stepName", c.name));
                 var d = st.wells.filter(function (w) { return stepDone(i, w); }).length;
@@ -747,14 +790,14 @@
         box.replaceChildren(el("b", "infoTitle", "Well " + id));
         if (!seq.length) box.appendChild(el("span", "muted", "Nothing planned."));
         var nextFound = false;
+        var parts = sharePct(seq.map(function (i) { return { c: byId(S.steps[i].compoundId) || { volumeUl: 0 } }; }));
         seq.forEach(function (i, k) {
             var c = byId(S.steps[i].compoundId) || { tag: "?", color: "#999999", name: "?", volumeUl: 0 };
-            var row = el("div", "infoRow"), tag = el("span", "tipTag", c.tag), done = stepDone(i, id);
+            var row = el("div", "infoRow"), tag = el("i", "dot"), done = stepDone(i, id);
             tag.style.background = c.color;
-            tag.style.color = textOn(c.color);
             row.appendChild(el("span", "muted", (k + 1) + "."));
             row.appendChild(tag);
-            row.appendChild(el("span", null, c.name + " \u00B7 " + fmtVol(c.volumeUl)));
+            row.appendChild(el("span", null, c.name + " \u00B7 " + fmtVol(c.volumeUl) + " \u00B7 " + fmtPct(parts[k].pct)));
             var stt = done ? "\u2713 added" : !nextFound && running() ? "next" : "step " + (i + 1);
             if (!done) nextFound = true;
             row.appendChild(el("span", "infoState " + (done ? "ok" : ""), stt));
@@ -787,6 +830,86 @@
         renderAll();
         toast("Plate cleared.");
     };
+    /* ---------- plan file: export to share, import someone else's ----------
+       The file names compounds instead of using database ids, so it works on any computer:
+       {"format": "wellPlate.plan", "version": 1, "compounds": [{name, tag, volumeUl, color}],
+        "steps": [{"kind": "add", "compound": 0, "wells": [...]}, {"kind": "wait", "seconds": 60}]}
+       ("compound" is an index into "compounds"). */
+    var PLAN_FORMAT = "wellPlate.plan";
+    $("#exportBtn").onclick = function () {
+        if (!S.steps.length) { toast("The plan is empty: add some wells first."); return; }
+        var used = [], index = {};
+        var steps = S.steps.map(function (st) {
+            if (st.kind === "wait") return { kind: "wait", seconds: st.seconds };
+            if (!(st.compoundId in index)) {
+                var c = byId(st.compoundId) || { name: "Unknown", tag: "", volumeUl: 0, color: "#B4BEC9" };
+                index[st.compoundId] = used.length;
+                used.push({ name: c.name, tag: c.tag, volumeUl: c.volumeUl, color: c.color });
+            }
+            return { kind: "add", compound: index[st.compoundId], wells: st.wells.slice() };
+        });
+        var file = { format: PLAN_FORMAT, version: 1, exportedAt: new Date().toISOString(), compounds: used, steps: steps };
+        var blob = new Blob([JSON.stringify(file, null, 2)], { type: "application/json" });
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "well-plate-plan-" + new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-") + ".json";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+        toast("Exported " + steps.length + (steps.length === 1 ? " step" : " steps") + " and " + used.length + (used.length === 1 ? " compound." : " compounds."));
+    };
+    $("#importBtn").onclick = function () { $("#importFile").value = ""; $("#importFile").click(); };
+    $("#importFile").onchange = function (e) {
+        var f = e.target.files && e.target.files[0];
+        if (!f) return;
+        if (f.size > 2 * 1024 * 1024) { toast("That file is too big to be a plan."); return; }
+        f.text().then(function (text) {
+            var data;
+            try { data = JSON.parse(text); } catch (x) { throw new Error("That file is not a plan (it is not valid JSON)."); }
+            if (!data || data.format !== PLAN_FORMAT || !Array.isArray(data.compounds) || !Array.isArray(data.steps)) {
+                throw new Error("That file is not a Well Plate plan. Use a file made with Export.");
+            }
+            if (data.version > 1) throw new Error("That plan was made by a newer version of this app.");
+            var nAdd = data.steps.filter(function (st) { return st && st.kind === "add"; }).length;
+            var msg = "Replace the current plan with \"" + f.name + "\"?\n\n" + data.steps.length + " steps, " +
+                data.compounds.length + " compounds. Compounds you already have (same name) are reused; the others are added.";
+            if (running()) msg += "\n\nThis resets the current run.";
+            if (!nAdd || !window.confirm(msg)) { if (!nAdd) toast("That plan has no wells in it."); return; }
+            return importPlan(data);
+        }).catch(fail);
+    };
+    function importPlan(data) {
+        // 1. map every compound in the file to one here: same name (any case) = same compound, else create it
+        var ids = [], created = 0;
+        var chain = Promise.resolve();
+        data.compounds.forEach(function (fc, k) {
+            chain = chain.then(function () {
+                var name = String((fc && fc.name) || "").trim();
+                var mine = S.compounds.filter(function (c) { return c.name.toLowerCase() === name.toLowerCase(); })[0];
+                if (mine) { ids[k] = mine.id; return; }
+                return api("POST", "/api/compounds", {
+                    name: name, tag: fc.tag || "", volumeUl: fc.volumeUl, color: fc.color || nextColor()
+                }).then(function (res) { ids[k] = res.compound.id; created++; applyState(res.state); });
+            });
+        });
+        // 2. the steps, with this computer's compound ids (the server checks wells and timers again)
+        return chain.then(function () {
+            var steps = data.steps.map(function (st) {
+                if (st && st.kind === "wait") return { kind: "wait", seconds: st.seconds };
+                if (st && st.kind === "add" && ids[st.compound] != null) return { kind: "add", compoundId: ids[st.compound], wells: st.wells };
+                return null;
+            }).filter(Boolean);
+            return api("PUT", "/api/plan", { plan: steps });
+        }).then(function (res) {
+            S.staged = {};
+            applyState(res.state, true);
+            toast("Imported " + res.steps + (res.steps === 1 ? " step" : " steps") +
+                (created ? ", added " + created + (created === 1 ? " new compound" : " new compounds") : "") + "." +
+                (res.runReset ? " The run was reset." : ""));
+        });
+    }
+
     function renderBar() {
         document.body.dataset.tool = S.tool;
         [].forEach.call($("#toolSeg").children, function (b) { b.setAttribute("aria-pressed", String(b.dataset.tool === S.tool)); });
@@ -950,8 +1073,10 @@
     }, 100);
     function renderTip() {
         var t = S.tip, bar = $("#tipBar");
-        bar.hidden = !t.well && !(S.camera && S.camera.online);
-        if (bar.hidden) return;
+        // The bar keeps its space in the Run tab (so the plate is the same size as in Plan); it just hides its content
+        var idle = !t.well && !(S.camera && S.camera.online);
+        bar.classList.toggle("idle", idle);
+        if (idle) return;
         bar.dataset.state = tipState();
         $("#tipWell").textContent = t.well || "";
         var text = !t.well ? "Not over a well"
@@ -1003,22 +1128,24 @@
         // In tip: what the user says is in the tip, and a warning if the current step needs another compound
         var c = byId(S.activeId), tip = $("#inTip");
         tip.replaceChildren(el("span", "runLabel", "In tip"));
+        // The box takes the compound's own color, so it matches its wells on the plate
+        if (c) tip.style.setProperty("--tipColor", c.color); else tip.style.removeProperty("--tipColor");
+        tip.classList.toggle("empty", !c);
         var tv = el("span", "bigValue");
         if (c) {
-            var tag = el("span", "tipTag big", c.tag);
-            tag.style.background = c.color;
-            tag.style.color = textOn(c.color);
-            tv.appendChild(tag);
             tv.appendChild(el("span", "bigName", c.name));
             tv.appendChild(el("span", "muted", fmtVol(c.volumeUl)));
         } else tv.appendChild(el("span", "muted", "Tap a compound on the left"));
         tip.appendChild(tv);
         if (curSt && curSt.kind === "add" && curSt.compoundId !== S.activeId && byId(curSt.compoundId)) {
             tip.appendChild(el("span", "tipWarn", "Step " + (cur + 1) + " needs " + byId(curSt.compoundId).name));
-        }
+            tip.classList.add("wrong");
+        } else tip.classList.remove("wrong");
 
         // Next: the well, or the timer countdown
         var nx = $("#nextWell"), nv = el("span", "bigValue");
+        nx.classList.toggle("timer", !!held);
+        nx.classList.toggle("idle", !held && (!running() || cur == null));
         if (held) {  // every well left in this step is still on its timer
             nx.replaceChildren(el("span", "runLabel", "Timer"));
             nv.appendChild(el("span", "nextId timer", fmtTime(held.left)));
