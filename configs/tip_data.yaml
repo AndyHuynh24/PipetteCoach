@@ -18,9 +18,21 @@ videos:
   # plate boxes (plate does not move); frames 3093/4933/4193: SAM mask grew past the plate (checked by eye).
   pipette5: {xml: data/own/tips_cvat/annotations5.xml, video: data/raw/pipette5.mov, crop: plate, val_from: 140,
              test_from: 165, n_neg: 120, skip: [[193.0, 100000]], label_step: 2, outline: cvat_plate,
-             plate_drop: [3093, 4193, 4933]}
+             plate_drop: [3093, 4193, 4933], well_split: [400, 475]}
+  # pipette6: red liquid in a yellow tip; pipette7: clear light-blue liquid (looks green through the yellow tip).
+  # liquid: [hue_lo, hue_hi, sat_min] of the liquid in the tip (OpenCV hue 0-180, lo > hi wraps through red): its
+  # labelled frames also get copies with the tip liquid recoloured (recolour_copies below; scripts/render_liquid_colors.py
+  # previews them). Tips labelled 0.4-57 s (pipette6) and 0-27 s (pipette7): last ~30% held out.
+  pipette6: {xml: data/own/tips_cvat/annotations6.xml, video: data/raw/pipette6.mov, crop: plate, val_from: 40,
+             test_from: 48, n_neg: 40, liquid: [160, 10, 70]}
+  pipette7: {xml: data/own/tips_cvat/annotations7.xml, video: data/raw/pipette7.mov, crop: plate, val_from: 19,
+             test_from: 23, n_neg: 30, liquid: [40, 88, 12]}
+  # well_split: [val_from, test_from] (s) for the well-net labels (build_well_labels.py) when the grid was checked
+  # over the whole video, not just the tip range; defaults to val_from / test_from.
 neg_gap_s: 1.0          # "no tip" candidates: at least this far from any labelled frame (then checked by eye)
 plate_margin: [0.15, 0.35]  # plate crop: outline + this share of its size on each side (random per frame)
 random_crop: [0.45, 1.0]    # random crop: square side as a share of the frame's short side
 tip_box_frac: 0.04      # tip box side as a share of the crop's long side (~0.8 well spacing on a plate crop)
+recolour_copies: 3      # train: this many random-colour copies per labelled tip frame of a `liquid:` video;
+                        # val / test: one copy per colour (pipette_coach.tips.LIQUID_COLOURS), to score each colour
 seed: 0

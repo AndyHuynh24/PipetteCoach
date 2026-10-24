@@ -27,23 +27,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pipette_coach.config import CONFIG_DIR, REPO_ROOT, load_config  # noqa: E402
 from pipette_coach.data import PROCESSED_DIR  # noqa: E402
 from pipette_coach.tips import (  # noqa: E402
+    LIQUID_COLOURS,
     in_skip,
+    liquid_centre,
     negative_candidates,
     parse_cvat_plates,
     parse_cvat_points,
     plate_crop_box,
     pose_lines,
     random_crop_box,
+    recolour,
     split_of,
+    tip_liquid_mask,
+    video_path,
 )
 
 WORK = PROCESSED_DIR / "tip_data"
 TILE = 360
-
-
-def video_path(name: str) -> Path:
-    v = load_config("tip_data")["videos"].get(name, {})
-    return REPO_ROOT / v["video"] if "video" in v else REPO_ROOT / "data" / "raw" / f"{name}.mp4"
 
 
 def cvat_plate_outlines(v: dict, n: int, fps: float) -> np.ndarray:
@@ -175,7 +175,8 @@ def stage_build(cfg: dict, videos: list[str], name: str) -> None:
         cap = cv2.VideoCapture(str(video_path(vname)))
         fps = cap.get(cv2.CAP_PROP_FPS)
         outlines = np.load(WORK / f"{vname}_outlines.npy") if v["crop"] == "plate" else None
-        st = stats[vname] = {sp: [0, 0] for sp in ("train", "val", "test")} | {"no_crop": 0, "skipped": 0}
+        st = stats[vname] = {sp: [0, 0] for sp in ("train", "val", "test")}
+        st |= {"no_crop": 0, "skipped": 0, "recoloured": 0}
         step = v.get("label_step", 1)  # 30 fps runs of near-identical frames: every step-th labelled frame is enough
         items = [(f, tips[f]) for f in sorted(tips) if f % step == 0] + [(f, []) for f in negs.get(vname, [])]
         for f, pts in items:
@@ -211,6 +212,17 @@ def stage_build(cfg: dict, videos: list[str], name: str) -> None:
             (out / "labels" / sp / f"{stem}.txt").write_text("".join(f"{ln}\n" for ln in lines))
             st[sp][0 if pts else 1] += 1
             crops[stem] = [int(x0), int(y0), int(x1), int(y1)]
+            if pts and "liquid" in v:  # recoloured tip liquid: train random colours, val / test every colour
+                m = np.maximum.reduce([tip_liquid_mask(img, p, v["liquid"]) for p in pts])
+                if m.max() >= 0.5:
+                    names = list(LIQUID_COLOURS)
+                    pick = rng.choice(names, cfg["recolour_copies"], replace=False) if sp == "train" else names
+                    for c in pick:
+                        rc = recolour(img, m, liquid_centre(v["liquid"]), *LIQUID_COLOURS[c])[y0:y1, x0:x1]
+                        cv2.imwrite(str(out / "images" / sp / f"{stem}_{c}.jpg"), rc, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                        (out / "labels" / sp / f"{stem}_{c}.txt").write_text("".join(f"{ln}\n" for ln in lines))
+                        crops[f"{stem}_{c}"] = crops[stem]
+                        st["recoloured"] += 1
             vis = crop.copy()
             for x, y in pts:
                 cv2.drawMarker(vis, (int(x - x0), int(y - y0)), (0, 0, 255), cv2.MARKER_CROSS, 24, 3)

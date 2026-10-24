@@ -43,6 +43,7 @@ from pipette_coach.localizer.session import read_frames  # noqa: E402
 from pipette_coach.localizer.synthetic import DYES  # noqa: E402
 from pipette_coach.localizer.well_net import WellNet, build_model, to_tensor  # noqa: E402
 from pipette_coach.runs import new_run_dir, write_metrics  # noqa: E402
+from pipette_coach.tips import video_path  # noqa: E402
 
 SIGMA = 1.5
 PATCH = 160
@@ -165,7 +166,7 @@ def video_frames(video: str, split: str) -> list[tuple[np.ndarray, np.ndarray, n
     video in the given time split (data/processed/well_labels/<video>.json); frames with no clean reference skipped."""
     lab = json.loads((PROCESSED_DIR / "well_labels" / f"{video}.json").read_text())
     nominal = load_config("localizer")["wells"]["pitch_px_nominal"]
-    cap = cv2.VideoCapture(str(REPO_ROOT / "data" / "raw" / f"{video}.mp4"))
+    cap = cv2.VideoCapture(str(video_path(video)))
     out = []
     for e in lab["frames"]:
         if e["split"] != split or e["used"] is None:
@@ -194,6 +195,8 @@ def main() -> None:
     ap.add_argument("--use-splits", nargs="+", default=["train"], choices=["train", "val", "test"])
     ap.add_argument("--video-labels", nargs="*", default=[], help="own videos with hand-checked grids")
     ap.add_argument("--video-share", type=float, default=0.5, help="share of each batch from the own videos")
+    ap.add_argument("--init", default=None, help="start from these weights (e.g. models/well_net/best.pt)")
+    ap.add_argument("--video-only", action="store_true", help="only the --video-labels (no dataset clips), no eval")
     ap.add_argument("--eval-only", action="store_true", help="no training: evaluate models/<out>/best.pt")
     ap.add_argument("--no-eval", action="store_true", help="train and save only (e.g. the final all-label model)")
     ap.add_argument(
@@ -209,9 +212,13 @@ def main() -> None:
     torch.manual_seed(a.seed)
     cfg = load_config("localizer")
     det = PlateDetector(cfg)
-    grids = json.loads((PROCESSED_DIR / "clip_grids.json").read_text())
-    ok = [r["clip"] for r in json.loads((PROCESSED_DIR / "label_ring_check.json").read_text()) if r["verdict"] == "OK"]
-    ok = [c for c in ok if plate_of(c) not in set(excluded_plates())]
+    a.no_eval = a.no_eval or a.video_only
+    grids, ok = {}, []
+    if not a.video_only:
+        grids = json.loads((PROCESSED_DIR / "clip_grids.json").read_text())
+        ok = [r["clip"] for r in json.loads((PROCESSED_DIR / "label_ring_check.json").read_text())
+              if r["verdict"] == "OK"]  # fmt: skip
+        ok = [c for c in ok if plate_of(c) not in set(excluded_plates())]
     items = []
     t0 = time.time()
     if a.eval_only:
@@ -243,9 +250,13 @@ def main() -> None:
             g = project(H, GRID) - off
             vitems.append({"img": crop, "pos": g[used], "ign": g[~used], "pitch": pitch_px(H)})
     print(f"train: {len(vitems)} hand-checked own-video frames ({', '.join(a.video_labels) or 'none'})", flush=True)
+    if a.video_only:  # every batch from the own videos
+        items, vitems = vitems, []
 
     dev = _default_device()
     model = build_model().to(dev)
+    if a.init:
+        model.load_state_dict(torch.load(REPO_ROOT / a.init, map_location=dev))
     opt = torch.optim.AdamW(model.parameters(), lr=2e-3, weight_decay=1e-4)
     steps_per_epoch = max(len(items) // 16, 1)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, 2e-3, total_steps=a.epochs * steps_per_epoch)
@@ -276,7 +287,8 @@ def main() -> None:
         run = new_run_dir(a.out.replace("_", "-"))
         info = {"train_clips": len(ok), "train_frames": len(items), "video_labels": a.video_labels,
                 "video_frames": len(vitems), "transfyr_labels": a.transfyr_labels, "use_splits": a.use_splits,
-                "epochs": a.epochs, "perspective": a.perspective, "seed": a.seed}  # fmt: skip
+                "epochs": a.epochs, "perspective": a.perspective, "seed": a.seed, "init": a.init,
+                "video_only": a.video_only}  # fmt: skip
         write_metrics(run, info)
         (run / "notes.md").write_text(
             f"# Heatmap well net (trained, not evaluated)\n\n{info}\n\nWeights: {out}/best.pt. "

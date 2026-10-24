@@ -6,6 +6,57 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from pipette_coach.config import REPO_ROOT, load_config
+
+
+def video_path(name: str) -> Path:
+    """Own video file: the `video:` of configs/tip_data.yaml (e.g. pipette5.mov), else data/raw/<name>.mp4."""
+    v = load_config("tip_data")["videos"].get(name, {})
+    return REPO_ROOT / v["video"] if "video" in v else REPO_ROOT / "data" / "raw" / f"{name}.mp4"
+
+
+# Liquid colours for recolouring the liquid in the tip: (OpenCV hue 0-180, saturation gain)
+LIQUID_COLOURS = {"red": (176, 1.0), "orange": (10, 1.0), "yellow": (27, 1.0), "green": (60, 1.0),
+                  "lightblue": (95, 1.0), "blue": (115, 1.0), "purple": (140, 1.0), "clear": (0, 0.15)}  # fmt: skip
+LIQUID_ROI = 140  # px around the tip end where liquid is searched (1280x720: longer than the visible liquid column)
+LIQUID_WIN = 14  # a blob counts as tip liquid if it comes this close to the labelled tip end
+
+
+def tip_liquid_mask(img: np.ndarray, tip: tuple[float, float], liquid: list[int]) -> np.ndarray:
+    """Float mask 0..1 of the liquid in the tip whose end is at `tip`. liquid = [hue_lo, hue_hi, sat_min] (OpenCV
+    hue, lo > hi wraps through red; configs/tip_data.yaml). Only coloured blobs touching the tip end are kept, so
+    hands, wells and cups are left alone."""
+    lo, hi, smin = liquid
+    h, s, v = cv2.split(cv2.cvtColor(img, cv2.COLOR_BGR2HSV))
+    hue = ((h >= lo) | (h <= hi)) if lo > hi else ((h >= lo) & (h <= hi))
+    x, y = int(tip[0]), int(tip[1])
+    disc = np.zeros(h.shape, np.uint8)
+    cv2.circle(disc, (x, y), LIQUID_ROI, 1, -1)
+    m = (hue & (s >= smin) & (v >= 60) & (disc > 0)).astype(np.uint8)
+    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    _, lab, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+    w = LIQUID_WIN
+    near = set(np.unique(lab[max(y - w, 0) : y + w + 1, max(x - w, 0) : x + w + 1])) - {0}
+    keep = [i for i in near if stats[i, cv2.CC_STAT_AREA] >= 20]
+    return cv2.GaussianBlur(np.isin(lab, keep).astype(np.float32), (0, 0), 1.0)
+
+
+def liquid_centre(liquid: list[int]) -> float:
+    lo, hi, _ = liquid
+    return ((lo + (hi + 180 if lo > hi else hi)) / 2) % 180
+
+
+def recolour(img: np.ndarray, mask: np.ndarray, centre: float, hue: int, sat_gain: float) -> np.ndarray:
+    """Move the masked pixels' hue from around `centre` to around `hue` (each keeps its offset, so the meniscus and
+    reflections stay); sat_gain < 1 fades the colour (clear liquid)."""
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(np.float32)
+    d = (hsv[..., 0] - centre + 90) % 180 - 90
+    hsv[..., 0] = (hue + d) % 180
+    hsv[..., 1] = np.clip(hsv[..., 1] * sat_gain, 0, 255)
+    out = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR).astype(np.float32)
+    m = mask[..., None]
+    return (img * (1 - m) + out * m).astype(np.uint8)
+
 
 def parse_cvat_points(xml: Path) -> tuple[dict[int, list[tuple[float, float]]], int]:
     """CVAT for images 1.1 export of a video task -> ({frame id: [(x, y) tip ends]}, number of frames). Label name

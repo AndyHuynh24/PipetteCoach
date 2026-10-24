@@ -14,6 +14,7 @@ The confidence threshold is chosen on val (--conf auto: best tip_found - false_a
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -28,6 +29,12 @@ from pipette_coach.runs import new_run_dir, write_metrics  # noqa: E402
 from pipette_coach.tips import well_of  # noqa: E402
 
 HIT = 0.5  # spacings
+
+
+def parse_stem(stem: str) -> tuple[str, int, str | None]:
+    """'pipette6_f00134' or 'pipette6_f00134_blue' (recoloured copy) -> (video, frame, colour | None)."""
+    m = re.fullmatch(r"(.+)_f(\d+)(?:_([a-z]+))?", stem)
+    return m.group(1), int(m.group(2)), m.group(3)
 
 
 def predict_all(model, files, imgsz, device):
@@ -76,13 +83,12 @@ def main() -> None:
     splits = ["train", "val", "test"] if a.split == "all" else [a.split]
     files = sorted(f for sp in splits for f in (root / "images" / sp).glob("*.jpg"))
     if a.videos:
-        files = [f for f in files if f.stem.rsplit("_f", 1)[0] in a.videos.split(",")]
+        files = [f for f in files if parse_stem(f.stem)[0] in a.videos.split(",")]
     preds = predict_all(YOLO(a.model), files, a.imgsz, a.device)
     grids = {}
     rows = []
     for f in files:
-        vname, fno = f.stem.rsplit("_f", 1)
-        fno = int(fno)
+        vname, fno, colour = parse_stem(f.stem)
         x0, y0, x1, y1 = crops[f.stem]
         lab = (root / "labels" / f.parent.name / f"{f.stem}.txt").read_text()
         gt = [tuple(map(float, ln.split()[5:7])) for ln in lab.splitlines() if ln.strip()]
@@ -99,6 +105,7 @@ def main() -> None:
             "file": f.name,
             "split": f.parent.name,
             "video": vname,
+            "colour": colour,
             "gt": bool(gt),
             "max_conf": float(conf.max()) if len(conf) else 0.0,
         }
@@ -119,6 +126,8 @@ def main() -> None:
     m = {"model": a.model, "data": a.data, "split": a.split, "conf": float(thr), "all": score(rows, thr)}
     for vname in sorted({r["video"] for r in rows}):
         m[vname] = score([r for r in rows if r["video"] == vname], thr)
+    for c in sorted({r["colour"] for r in rows if r["colour"]}):  # recoloured tip liquid (build_tip_dataset.py)
+        m[f"colour_{c}"] = score([r for r in rows if r["colour"] == c], thr)
     run = new_run_dir(a.name or f"tip-eval-{a.split}")
     write_metrics(run, m)
     (run / "rows.json").write_text(json.dumps(rows))
