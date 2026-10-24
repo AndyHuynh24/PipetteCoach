@@ -19,6 +19,9 @@ import re
 ROWS, COLUMNS = 8, 12
 WELL_RE = re.compile(r"^([A-Z])([0-9]{1,2})$")
 COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+# Guided: one step at a time, the app points at the next well. Free: hold any substance, tap it, and every well
+# that can take it now lights up (each well still follows its own sequence, unless it is marked "any order").
+RUN_MODES = ("guided", "free")
 # Where well A1 is in the camera picture. The camera code turns it into the
 # direction rows A -> H run in the image. "auto" lets the camera guess.
 A1_CORNERS = ("auto", "topLeft", "topRight", "bottomLeft", "bottomRight")
@@ -96,6 +99,20 @@ def normalizeA1Corner(corner):
     return corner
 
 
+def normalizeRunMode(mode):
+    mode = str(mode or "")
+    if mode not in RUN_MODES:
+        raise ValueError(f"mode must be one of: {', '.join(RUN_MODES)}.")
+    return mode
+
+
+def cleanAnyOrder(wells):
+    """Wells whose substances may go in in any order -> sorted list of valid well ids."""
+    if not isinstance(wells, (list, tuple)):
+        raise ValueError('Send the wells as a list, like ["A1", "B2"].')
+    return sortWells({normalizeWell(w) for w in wells if inPlate(normalizeWell(w))})
+
+
 def optionalId(value, label="id"):
     """None stays None; 3 and '3' become 3; anything else is an error."""
     if value is None or value == "":
@@ -112,9 +129,9 @@ def optionalId(value, label="id"):
 def validateCompound(data):
     name = str(data.get("name", "")).strip()
     if not name:
-        raise ValueError("Enter a compound name.")
+        raise ValueError("Enter a substance name.")
     if len(name) > 40:
-        raise ValueError("Compound name is too long (40 characters max).")
+        raise ValueError("Substance name is too long (40 characters max).")
     try:
         volume = float(data.get("volumeUl"))
     except (TypeError, ValueError):
@@ -227,7 +244,7 @@ def nextStepFor(steps, done, well):
     return next((i for i in wellSequences(steps).get(well, []) if doneTime(done, i, well) is None), None)
 
 
-def classifyDrops(wells, compoundId, steps, done, timers, now=0.0):
+def classifyDrops(wells, compoundId, steps, done, timers, now=0.0, anyOrder=()):
     """Judge each reported well against the steps.
 
     kind is one of:
@@ -239,6 +256,8 @@ def classifyDrops(wells, compoundId, steps, done, timers, now=0.0):
       early      this well's timer before this step is still running
 
     timers is wellTimers(...). An ok drop is stored with its time (`now`): that starts the well's next timer.
+    Wells in anyOrder take their substances in any order: no "order" check, and only a RUNNING timer before the
+    step holds the well (one whose substance is not in yet has not started, so it does not).
     Returns (results, newDone); results carry plannedId (the compound the well needs next) and step.
     """
     seq = wellSequences(steps)
@@ -249,14 +268,16 @@ def classifyDrops(wells, compoundId, steps, done, timers, now=0.0):
         pending = [i for i in mine if not newDone.get(str(i), {}).get(w)]
         plannedId = steps[pending[0]]["compoundId"] if pending else None
         match = next((i for i in pending if steps[i]["compoundId"] == compoundId), None)
+        free = w in anyOrder
+        holds = ("running",) if free else ("pending", "running")
         step = None
         if not mine:
             kind = "unplanned"
         elif match is None:
             kind = "duplicate" if any(steps[i]["compoundId"] == compoundId for i in mine) else "wrong"
-        elif match != pending[0]:
+        elif match != pending[0] and not free:
             kind = "order"
-        elif any(t["step"] < match and t["state"] != "done" for t in timers.get(w, [])):
+        elif any(t["step"] < match and t["state"] in holds for t in timers.get(w, [])):
             kind = "early"
         else:
             kind, step = "ok", match

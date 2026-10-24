@@ -29,7 +29,7 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from pipette_coach.config import REPO_ROOT, load_config  # noqa: E402
+from pipette_coach.config import REPO_ROOT, TIP_MODEL, load_config  # noqa: E402
 from pipette_coach.data import PROCESSED_DIR  # noqa: E402
 from pipette_coach.runs import new_run_dir, write_metrics  # noqa: E402
 from pipette_coach.tips import DwellDetector, plate_crop_box, well_of  # noqa: E402
@@ -213,7 +213,7 @@ def main() -> None:
     ap.add_argument("--end", type=float, default=390.0)
     ap.add_argument("--tracker", default="", help='PlateTracker kwargs as JSON, e.g. {"track_every": 2}')
     ap.add_argument("--plate", default="base")
-    ap.add_argument("--model", default="models/tip_all/weights/best.pt")
+    ap.add_argument("--model", default=TIP_MODEL)
     ap.add_argument("--imgsz", type=int, default=480)
     ap.add_argument("--tips", default="all")
     ap.add_argument("--conf", type=float, default=0.3)

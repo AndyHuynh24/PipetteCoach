@@ -3,8 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Well Plate UI</title>
+<title>PipetteCoach</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%3E%3Crect%20width%3D%2224%22%20height%3D%2224%22%20rx%3D%226%22%20fill%3D%22%230F766E%22%2F%3E%20%3Cg%20fill%3D%22%23fff%22%20transform%3D%22translate(6.8%2017.2)%20rotate(45)%20scale(0.7)%22%3E%20%3Cpath%20d%3D%22M-0.9%20-6h1.8l-0.6%205.4c-0.1%200.5-0.5%200.5-0.6%200z%22%2F%3E%20%3Crect%20x%3D%22-1.1%22%20y%3D%22-9.7%22%20width%3D%222.2%22%20height%3D%224%22%20rx%3D%220.5%22%2F%3E%20%3Crect%20x%3D%22-2.5%22%20y%3D%22-18%22%20width%3D%225%22%20height%3D%228.7%22%20rx%3D%222%22%2F%3E%20%3Cpath%20d%3D%22M2.5%20-16.6c2.2%200%202.4%202.8%200%203.2%22%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%221.8%22%20stroke-linecap%3D%22round%22%2F%3E%20%3Crect%20x%3D%22-0.5%22%20y%3D%22-19.6%22%20width%3D%221%22%20height%3D%221.9%22%2F%3E%20%3Crect%20x%3D%22-1.4%22%20y%3D%22-21%22%20width%3D%222.8%22%20height%3D%221.7%22%20rx%3D%220.7%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E">
+<!-- Installable app (Chrome: Install PipetteCoach; Safari: File > Add to Dock), opens full screen -->
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="theme-color" content="#0F766E">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PipetteCoach">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body data-view="plan">
@@ -24,7 +31,7 @@
                     <rect x="-1.4" y="-21" width="2.8" height="1.7" rx="0.7"/>
                 </g>
             </svg>
-            <span class="brandName">Well Plate</span>
+            <span class="brandName">PipetteCoach</span>
         </div>
         <nav class="tabs" role="tablist" aria-label="View">
             <button class="tab" role="tab" data-tab="plan" aria-selected="true">
@@ -42,25 +49,41 @@
         </nav>
         <span class="spacer"></span>
         <div class="headRun runOnly">
-            <div class="legend" aria-label="Legend">
-                <span><i class="lg planned"></i>To add</span>
-                <span><i class="lg next"></i>Next well</span>
-                <span><i class="lg done">&#10003;</i>All added</span>
-                <span><i class="lg timerLg"></i>Timer running</span>
-                <span><i class="lg err">!</i>Check</span>
-            </div>
+            <button class="btn primary liveBtn" id="liveBtn" type="button" title="Run the camera tracker (scripts/live_demo.py) on this computer"><i class="linkDot" id="liveDot"></i><span id="liveText">Start camera</span></button>
             <details class="setup" id="setup">
-                <summary id="setupSummary">Camera &amp; test</summary>
+                <summary id="setupSummary">Camera &amp; test <span class="a1Badge" id="a1Badge" title="Well A1 corner not set yet">A1?</span></summary>
                 <div class="setupBody">
-                    <label for="cornerSelect">Well A1 in the camera picture</label>
-                    <select id="cornerSelect">
+                    <div class="camHead">
+                        <label for="cameraInput">Camera</label>
+                        <button class="btn small" id="findCamBtn" type="button">Find cameras</button>
+                    </div>
+                    <div class="camList" id="camList" role="group" aria-label="Cameras"></div>
+                    <input class="field" id="cameraInput" value="0" autocomplete="off" spellcheck="false"
+                           placeholder="Camera number or stream URL" aria-label="Camera number or stream URL">
+                    <label class="checkLabel"><input type="checkbox" id="liveWindowBox" checked> Show the camera window</label>
+                    <span class="setupLabel">Flip the picture</span>
+                    <div class="row">
+                        <button class="btn flipBtn" id="flipHBtn" type="button" aria-pressed="false">&#8644; Left&#8211;right</button>
+                        <button class="btn flipBtn" id="flipVBtn" type="button" aria-pressed="false">&#8645; Up&#8211;down</button>
+                    </div>
+                    <span class="setupLabel">Where is well A1 in the camera picture?</span>
+                    <div class="miniPlate" id="cornerPick" role="group" aria-label="Corner of well A1">
+                        <button type="button" data-corner="topLeft" style="left: 4px; top: 4px">A1</button>
+                        <button type="button" data-corner="topRight" style="right: 4px; top: 4px">A1</button>
+                        <button type="button" data-corner="bottomLeft" style="left: 4px; bottom: 4px">A1</button>
+                        <button type="button" data-corner="bottomRight" style="right: 4px; bottom: 4px">A1</button>
+                    </div>
+                    <span class="setupNote">In the camera window, find well A1 (row A, column 1: the corner with the A and 1 printed next to it) and click that corner here. Set the flip first.</span>
+                    <button class="btn small" type="button" data-corner="auto" id="cornerAutoBtn">Not sure: let the camera guess</button>
+                    <select id="cornerSelect" hidden>
                         <option value="auto">Not set (camera guesses)</option>
                         <option value="topLeft">Top left</option>
                         <option value="topRight">Top right</option>
                         <option value="bottomLeft">Bottom left</option>
                         <option value="bottomRight">Bottom right</option>
                     </select>
-                    <label class="checkLabel"><input type="checkbox" id="soundBox" checked> Alarm sound</label>
+                    <label class="checkLabel"><input type="checkbox" id="soundBox" checked> Sounds</label>
+                    <label class="checkLabel" title="From Start run until the run ends, the camera saves the raw camera video (no drawings) to runs/&lt;live demo&gt;/run_&lt;time&gt;.mp4, plus a .json with the dispenses and their times in the video"><input type="checkbox" id="recordBox"> Record each run (raw camera video)</label>
                     <span class="setupNote">Test without the camera:</span>
                     <a class="btn" href="/camera" target="cameraSimulator">Open camera simulator &#8599;</a>
                     <div class="row">
@@ -70,6 +93,10 @@
                 </div>
             </details>
         </div>
+        <button class="btn ghost iconBtn" id="fullBtn" type="button" title="Full screen (F)" aria-label="Full screen" aria-pressed="false">
+            <svg class="enterFull" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5v2H6v3zm11-5h5v5h-2V6h-3zM4 15h2v3h3v2H4zm14 0h2v5h-5v-2h3z"/></svg>
+            <svg class="exitFull" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h2v5H4V7h3zm8 0h2v3h3v2h-5zM4 15h5v5H7v-3H4zm11 0h5v2h-3v3h-2z"/></svg>
+        </button>
         <div class="linkInfo" hidden>
             <span class="linkItem"><i class="linkDot" id="serverDot"></i><span id="serverText">Connecting…</span></span>
             <span class="linkItem"><i class="linkDot" id="aiDot"></i><span id="aiText">Camera: not connected</span></span>
@@ -78,14 +105,10 @@
     </header>
 
     <!-- LEFT: compounds (this list is also the color legend), with its search right above it -->
-    <aside class="lib" aria-label="Compounds">
-        <button class="btn primary newBtn planOnly" id="newCompoundBtn" type="button">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-            New compound
-        </button>
+    <aside class="lib" aria-label="Substances">
         <div class="tools planOnly" aria-label="Plate tools">
             <div class="segmented toolSeg" id="toolSeg" role="group" aria-label="Tool">
-                <button data-tool="paint" aria-pressed="true" title="Select wells to add the chosen compound"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14c-1.66 0-3 1.34-3 3 0 1.31-1.16 2-2 2 .92 1.22 2.49 2 4 2 2.21 0 4-1.79 4-4 0-1.66-1.34-3-3-3zm13.71-9.37-1.34-1.34a.996.996 0 0 0-1.41 0L9 12.25 11.75 15l8.96-8.96a.996.996 0 0 0 0-1.41z"/></svg><span>Paint</span></button>
+                <button data-tool="paint" aria-pressed="true" title="Select wells to add the chosen substance"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14c-1.66 0-3 1.34-3 3 0 1.31-1.16 2-2 2 .92 1.22 2.49 2 4 2 2.21 0 4-1.79 4-4 0-1.66-1.34-3-3-3zm13.71-9.37-1.34-1.34a.996.996 0 0 0-1.41 0L9 12.25 11.75 15l8.96-8.96a.996.996 0 0 0 0-1.41z"/></svg><span>Paint</span></button>
                 <button data-tool="erase" aria-pressed="false" title="Select wells to clear"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.24 3.56l4.95 4.94c.78.79.78 2.05 0 2.84L12 20.53a4.008 4.008 0 0 1-5.66 0L2.81 17c-.78-.79-.78-2.05 0-2.84l10.6-10.6c.79-.78 2.05-.78 2.83 0zM4.22 15.58l3.54 3.53c.78.79 2.04.79 2.83 0l3.53-3.53-4.95-4.95-4.95 4.95z"/></svg><span>Erase</span></button>
                 <button data-tool="inspect" aria-pressed="false" title="Click a well to see what goes into it (right-click works with any tool)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg><span>Inspect</span></button>
             </div>
@@ -100,42 +123,57 @@
             </div>
         </div>
         <div class="libHead">
-            <h2>Compounds</h2>
+            <h2>Substances</h2>
+            <button class="btn primary newBtn planOnly" id="newCompoundBtn" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                New substance
+            </button>
         </div>
         <label class="searchBox">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-            <input id="searchBox" type="search" placeholder="Search compounds" aria-label="Search compounds">
+            <input id="searchBox" type="search" placeholder="Search substances" aria-label="Search substances">
         </label>
-        <p class="libHint runOnly">Tap the compound in the tip.</p>
+        <p class="libHint runOnly">Tap the substance in the tip.</p>
         <ul class="list" id="compoundList"></ul>
+        <!-- Run: what the well colors and marks mean, big, under the substances -->
+        <div class="legend runOnly" aria-label="Plate key">
+            <h2>Plate key</h2>
+            <span><i class="lg planned"></i>To add</span>
+            <span><i class="lg next"></i>Next well</span>
+            <span><i class="lg done">&#10003;</i>All added</span>
+            <span><i class="lg timerLg"></i>Timer running</span>
+            <span><i class="lg err">!</i>Check</span>
+            <span><i class="lg anyLg">&#8644;</i>Any order</span>
+        </div>
     </aside>
 
     <!-- CENTER + RIGHT -->
     <main class="stage">
         <div class="runBar runOnly" aria-label="Run status">
+            <!-- Status, step and progress in one column, so the big boxes fit on one row -->
             <div class="runStat runState">
-                <span class="statusPill" id="runPill">Not started</span>
+                <div class="segmented modeSeg" id="modeSeg" role="group" aria-label="Run mode">
+                    <button type="button" data-mode="guided" aria-pressed="true" title="One step at a time: the app shows the next well">Guided</button>
+                    <button type="button" data-mode="free" aria-pressed="false" title="Hold any substance: tap it and every well that can take it now lights up">Free</button>
+                </div>
+                <div class="pillRow">
+                    <span class="statusPill" id="runPill">Not started</span>
+                    <span class="recPill" id="recPill" hidden title="The camera is recording this run">REC</span>
+                </div>
                 <span class="stepNow" id="stepNow"></span>
+                <div class="runStat progress">
+                    <span id="progText"></span>
+                    <div class="progTrack"><i id="progBar"></i></div>
+                </div>
             </div>
             <div class="runStat tipStat" id="inTip"></div>
             <div class="tipBar runOnly idle" id="tipBar" aria-live="polite">
-            <span class="runLabel">Tip</span>
-            <span class="tipWell" id="tipWell"></span>
-            <span id="tipText"></span>
-        </div>
-
+                <span class="runLabel">Tip</span>
+                <span class="tipWell" id="tipWell"></span>
+                <span id="tipText"></span>
+            </div>
             <div class="runStat nextStat" id="nextWell"></div>
             <span class="spacer"></span>
-            <div class="runStat progress">
-                <span class="runLabel">Progress</span>
-                <span id="progText"></span>
-                <div class="progTrack"><i id="progBar"></i></div>
-            </div>
-            <div class="runActions">
-                <button class="btn primary big" id="startBtn">Start run</button>
-                <button class="btn" id="nextWellBtn" title="Count the outlined well as dispensed (overrides the camera) and go to the next well">Next well &#9656;</button>
-                <button class="btn" id="resetBtn">Reset run</button>
-            </div>
         </div>
         <div class="banner" id="banner" role="alert" hidden>
             <span class="bannerMark">!</span>
@@ -146,6 +184,12 @@
         <section class="plateView" id="viewPlate">
             <div class="plateWrap" id="plateWrap">
                 <div class="plateShadow" id="plateShadow"><div class="plate" id="plate"></div></div>
+                <!-- Run: the run buttons, big, right under the plate -->
+                <div class="runActions runOnly" id="runActions">
+                    <button class="btn primary" id="startBtn">Start run</button>
+                    <button class="btn" id="nextWellBtn" title="Count the outlined well as dispensed (overrides the camera) and go to the next well">Next well &#9656;</button>
+                    <button class="btn" id="resetBtn">Reset run</button>
+                </div>
                 <!-- Selection bar: always sits right under the plate (space is reserved, so nothing jumps) -->
                 <div class="stageBar planOnly idle" id="stageBar" aria-live="polite">
                     <span id="stageText"></span>
@@ -156,7 +200,7 @@
             <aside class="steps" aria-label="Protocol steps">
                 <h2>Protocol</h2>
                 <ol class="stepList" id="stepList"></ol>
-                <p class="hint" id="stepsEmpty">No steps yet. Pick a compound, select wells, then Confirm.</p>
+                <p class="hint" id="stepsEmpty">No steps yet. Pick a substance, select wells, then Confirm.</p>
             </aside>
         </section>
 
@@ -183,7 +227,7 @@
 <!-- Add / edit compound (opened by "+ New" or a compound's ⋯ > Edit) -->
 <dialog class="dialog" id="compoundDialog" aria-labelledby="editorTitle">
     <section class="editor" id="editor">
-        <h2 id="editorTitle">New compound</h2>
+        <h2 id="editorTitle">New substance</h2>
         <label class="fieldLabel">Name
             <input class="field" id="nameField" placeholder="e.g. IL-6 standard" maxlength="40">
         </label>
@@ -199,7 +243,7 @@
             <span class="fieldLabel">Color</span>
             <div class="swatches" id="swatches"></div>
             <label class="customColor" title="Pick any color">
-                <input type="color" id="colorField" value="#8E5CD9" aria-label="Custom compound color">
+                <input type="color" id="colorField" value="#8E5CD9" aria-label="Custom substance color">
                 <span>Custom</span>
             </label>
             <input class="field hexField" id="hexField" maxlength="7" spellcheck="false" aria-label="Color as hex, like #2F6FDE">
@@ -231,7 +275,7 @@
             <button type="button" class="btn" data-preset="1800">30 min</button>
             <button type="button" class="btn" data-preset="3600">1 h</button>
         </div>
-        <p class="hint">Each well waits on its own: its timer starts when the previous compound goes into that well.</p>
+        <p class="hint">Each well waits on its own: its timer starts when the previous substance goes into that well.</p>
         <div class="row">
             <button class="btn" value="cancel">Cancel</button>
             <button class="btn primary" value="add">Add timer</button>

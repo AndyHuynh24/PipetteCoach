@@ -131,8 +131,11 @@ def simulate(client, delay=1.2, errorRate=0.2, pollSeconds=0.5, rng=None):
                 if not res.get("accepted"):
                     print("The run is not active any more. Stopping.")
                     return False
-                print("  waiting for you to acknowledge the warning in the UI...")
-                client.waitForAck(pollSeconds=pollSeconds)
+                if res.get("ignored"):  # the server ignores the camera's mistakes (as if nothing happened)
+                    print("  ignored by the server")
+                else:
+                    print("  waiting for you to acknowledge the warning in the UI...")
+                    client.waitForAck(pollSeconds=pollSeconds)
                 time.sleep(delay)
             print(f"Drop {w}")
             res = client.reportDrop([w], cid)

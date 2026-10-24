@@ -11,16 +11,17 @@
     var ROWS = 8, COLS = 12;  // 96-well plates only: that is what the camera tracker knows
     // Pastel palette, but saturated enough to read clearly on the plate
     var PALETTE = ["#8EC5FF", "#FF9EB5", "#FFB57A", "#7EDDB0", "#B79CF2", "#FFE066", "#6FD6E0", "#B4BEC9"];
-    var TITLES = { wrong: "Wrong compound", unplanned: "Unplanned well", duplicate: "Duplicate drop", order: "Out of order", early: "Too early" };
-    var LABELS = { ok: "Match", wrong: "Wrong compound", unplanned: "Unplanned", duplicate: "Duplicate", order: "Out of order", early: "Too early" };
+    var TITLES = { wrong: "Wrong substance", unplanned: "Unplanned well", duplicate: "Duplicate drop", order: "Out of order", early: "Too early" };
+    var LABELS = { ok: "Match", wrong: "Wrong substance", unplanned: "Unplanned", duplicate: "Duplicate", order: "Out of order", early: "Too early" };
     var SOURCES = { camera: "Camera", test: "Test", manual: "Manual", simulator: "Simulator" };
 
     var S = {
         compounds: [],
-        steps: [], seq: {}, a1Corner: "auto",  // steps: [{kind: "add", compoundId, wells} | {kind: "wait", seconds}]
+        steps: [], seq: {}, a1Corner: "auto", mode: "guided", anyOrder: {},  // steps: [{kind: "add", compoundId, wells} | {kind: "wait", seconds}]
         run: { status: "draft", activeCompoundId: null, done: {}, alarm: null, progress: { done: 0, total: 0 }, timers: {}, serverTime: 0 },
         events: [],
         camera: { online: false, lastSeen: null },
+        live: { running: false, camera: null, exitCode: null, log: [] },  // the camera process started from this page
         activeId: null, editingId: null, view: "plan", tool: "paint", query: "", staged: {}, hoverStep: null,
         clockOffset: 0,
         connected: false, loaded: false, serverId: null, revision: -1
@@ -111,11 +112,34 @@
         for (var i = 0; i < S.steps.length; i++) if (S.steps[i].kind === "add" && !stepComplete(i)) return i;
         return null;
     }
+    function anyOrder(w) { return !!S.anyOrder[w]; }  // this well takes its substances in any order
     function wellReady(i, w) {  // step i's compound can go into w now: earlier compounds in, its timer done
         if (stepDone(i, w)) return false;
-        var seq = S.seq[w] || [];
-        for (var k = 0; k < seq.length && seq[k] < i; k++) if (!stepDone(seq[k], w)) return false;
-        return !wellTimerList(w).some(function (t) { return t.step < i && liveTimer(t).state !== "done"; });
+        var seq = S.seq[w] || [], free = anyOrder(w);
+        if (!free) for (var k = 0; k < seq.length && seq[k] < i; k++) if (!stepDone(seq[k], w)) return false;
+        // any order: only a RUNNING timer holds the well (one whose substance is not in yet has not started)
+        return !wellTimerList(w).some(function (t) {
+            var st = liveTimer(t).state;
+            return t.step < i && (free ? st === "running" : st !== "done");
+        });
+    }
+    function freeRun() { return S.mode === "free"; }
+    function readyFor(cid) {  // Free run: every well that can take this substance now (its own sequence decides)
+        if (!running() || cid == null) return [];
+        return Object.keys(S.seq).filter(function (w) {
+            return S.seq[w].some(function (i) { return S.steps[i].compoundId === cid && wellReady(i, w); });
+        }).sort(colMajor);
+    }
+    function heldFor(cid) {  // Free run: wells that need this substance but wait on a timer, the one ending first
+        var best = null;
+        if (!running() || cid == null) return null;
+        Object.keys(S.seq).forEach(function (w) {
+            var t = runningTimerOf(w);
+            if (!t) return;
+            var wants = S.seq[w].some(function (i) { return S.steps[i].compoundId === cid && !stepDone(i, w) && i > t.step; });
+            if (wants && (!best || t.left < best.left)) best = { well: w, left: t.left };
+        });
+        return best;
     }
     function nextWellOfStep(i) {
         if (i == null || S.steps[i].kind !== "add") return null;
@@ -195,13 +219,20 @@
         var first = !S.loaded;
         S.loaded = true;
         S.compounds = st.compounds;
+        var fresh = first ? [] : newlyDone(S.run, st.run), wasComplete = S.run.status === "complete";
         S.run = st.run;
         S.events = st.events;
         S.camera = st.camera || S.camera;
+        S.live = st.live || S.live;
+        S.cameraFlip = st.cameraFlip || S.cameraFlip;
         if (st.tip) setTip(st.tip, true);
         S.a1Corner = st.plate.a1Corner;
+        S.mode = st.run.mode || "guided";
+        S.anyOrder = {};
+        (st.plate.anyOrder || []).forEach(function (w) { S.anyOrder[w] = true; });
         S.clockOffset = (st.run.serverTime || Date.now() / 1000) - Date.now() / 1000;
         $("#cornerSelect").value = S.a1Corner;
+        $("#recordBox").checked = !!st.run.record;
 
         // The plan is edited locally. While a save is in flight, do not let an
         // older server copy overwrite what the user just painted.
@@ -232,6 +263,28 @@
 
         if (S.view === "records") loadPayload();
         renderAll();
+        if (fresh.length) {  // a dispense was counted: sound + a green pop on the well(s)
+            if (st.run.status === "complete" && !wasComplete) completeSound(); else dispensedSound();
+            popWells(fresh);
+        }
+    }
+    function newlyDone(before, after) {  // wells that got a substance between two states of the same run
+        if (!after || after.status === "draft" || before.startedAt !== after.startedAt) return [];
+        var out = [];
+        Object.keys(after.done || {}).forEach(function (i) {
+            var was = (before.done || {})[i] || {};
+            Object.keys(after.done[i]).forEach(function (w) { if (!was[w] && out.indexOf(w) < 0) out.push(w); });
+        });
+        return out;
+    }
+    function popWells(ids) {
+        cellEls.forEach(function (w) {
+            if (ids.indexOf(w.dataset.id) < 0) return;
+            w.classList.remove("justDone");
+            void w.offsetWidth;  // restart the animation if it is still running
+            w.classList.add("justDone");
+            setTimeout(function () { w.classList.remove("justDone"); }, 1300);
+        });
     }
 
     function connect() {
@@ -286,7 +339,7 @@
             return a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true });
         });
         if (!arr.length) {
-            list.appendChild(el("li", "emptyNote", S.compounds.length ? "No compounds match your search." : "No compounds yet. Add one below."));
+            list.appendChild(el("li", "emptyNote", S.compounds.length ? "No substances match your search." : "No substances yet. Add one below."));
             return;
         }
         arr.forEach(function (c) {
@@ -300,6 +353,8 @@
             b.appendChild(sw);
             b.appendChild(el("span", "cardName", c.name));
             b.appendChild(el("span", "cardCount", fmtVol(c.volumeUl) + " \u00B7 " + (S.view === "run" ? d + " of " + n + " dispensed" : n + (n === 1 ? " well" : " wells"))));
+            var nReady = S.view === "run" && freeRun() ? readyFor(c.id).length : 0;
+            if (nReady) b.appendChild(el("span", "readyBadge", nReady + " ready"));
             if (S.view === "run" && n) {
                 var m = el("div", "cardMini"), i = el("i");
                 i.style.width = (100 * d / n) + "%";
@@ -326,7 +381,7 @@
     }
     function renderEditorState() {
         var c = byId(S.editingId);
-        $("#editorTitle").textContent = c ? "Edit " + c.name : "New compound";
+        $("#editorTitle").textContent = c ? "Edit " + c.name : "New substance";
         $("#saveBtn").textContent = c ? "Save" : "Add";
     }
     function clearEditor() {
@@ -393,11 +448,35 @@
         if (e.key !== "Escape") return;
         if (menuFor != null) closeMenu(); else if (S.editingId != null) stopEditing();
     });
+    // Full screen: the button or F (not while typing). Esc leaves (the browser does that itself).
+    function isFull() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+    function toggleFull() {
+        var d = document.documentElement;
+        if (isFull()) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+        else {
+            var p = (d.requestFullscreen || d.webkitRequestFullscreen).call(d);
+            if (p && p.catch) p.catch(function () { toast("Full screen was blocked by the browser."); });
+        }
+    }
+    function showFull() {
+        document.body.classList.toggle("isFull", isFull());
+        $("#fullBtn").setAttribute("aria-pressed", String(isFull()));
+        $("#fullBtn").title = isFull() ? "Leave full screen (F or Esc)" : "Full screen (F)";
+    }
+    $("#fullBtn").onclick = toggleFull;
+    document.addEventListener("fullscreenchange", showFull);
+    document.addEventListener("webkitfullscreenchange", showFull);
+    document.addEventListener("keydown", function (e) {
+        if ((e.key !== "f" && e.key !== "F") || e.metaKey || e.ctrlKey || e.altKey) return;
+        if (e.target.closest("input, textarea, select, [contenteditable]")) return;
+        e.preventDefault();
+        toggleFull();
+    });
     $("#compoundList").addEventListener("scroll", closeMenu);
     window.addEventListener("resize", closeMenu);
     function readEditor() {
         var name = $("#nameField").value.trim();
-        if (!name) { toast("Enter a compound name first."); $("#nameField").focus(); return null; }
+        if (!name) { toast("Enter a substance name first."); $("#nameField").focus(); return null; }
         var vol = parseFloat($("#volField").value);
         if (isNaN(vol) || vol < 0) { toast("Volume must be 0 µL or more."); return null; }
         if ($("#hexField").classList.contains("bad")) { toast("Color must look like #2F6FDE."); $("#hexField").focus(); return null; }
@@ -510,12 +589,12 @@
     }
     function fitGrid() {
         var R = ROWS, C = COLS, pad = 8, gap = 3, hd = 20;  // keep in sync with .plate in style.css
-        // Plan: toolbar above + selection bar below. Run: tip bar above (same height) + the same space below.
-        // Same space taken in both tabs, so the plate is exactly the same size in Plan and Run.
-        // Plan: 92px (the floating Confirm bar at the bottom + the same space on top, so the plate stays centered).
-        // Run: the 76px run strip sits above the plate area, so only 16px more: the plate is the same size in both tabs.
+        // Plan: the selection bar right under the plate (its space is kept while idle).
+        // Run: the run strip sits above the plate area and the run buttons right under the plate (+ the 8px gap).
         var strip = S.view === "run" ? $(".runBar").offsetHeight : 0;
-        var reserve = S.view === "plan" ? 92 : S.view === "run" ? Math.max(16, 92 - strip) : 0;
+        var buttons = S.view === "run" ? $("#runActions").offsetHeight + 8 : 0;
+        var bar = S.view === "plan" ? $("#stageBar").offsetHeight + 8 : 0;  // the selection bar under the plate
+        var reserve = S.view === "plan" ? bar : S.view === "run" ? Math.max(buttons, 92 - strip) : 0;
         var W = wrap.clientWidth - 8, H = wrap.clientHeight - 8 - reserve;  // .plateWrap padding 4px
         // Narrow windows scroll (see style.css), so there the plate is sized by the width only
         if (window.matchMedia("(max-width: 760px)").matches) H = Infinity;
@@ -548,7 +627,11 @@
         var alarmSet = {};
         if (S.run.alarm) S.run.alarm.wells.forEach(function (id) { alarmSet[id] = 1; });
         var showLbl = plate.classList.contains("showLabels"), inRun = S.view === "run" && running();
-        var cur = currentStep(), next = S.view === "run" && !S.run.alarm ? nextWellOfStep(cur) : null;
+        var cur = currentStep(), nextSet = {};
+        if (S.view === "run" && !S.run.alarm) {  // guided: the one next well; free: every well ready for the tip
+            if (freeRun()) readyFor(S.activeId).forEach(function (w) { nextSet[w] = 1; });
+            else { var nw = nextWellOfStep(cur); if (nw) nextSet[nw] = 1; }
+        }
         var hl = S.hoverStep != null && S.steps[S.hoverStep] && S.steps[S.hoverStep].kind === "add" ? S.steps[S.hoverStep].wells : [];
         var stagedC = byId(S.activeId);
         cellEls.forEach(function (w) {
@@ -585,7 +668,7 @@
             w.classList.toggle("sel", !!sel[id]);
             w.classList.toggle("staged", S.view === "plan" && !!S.staged[id]);
             w.classList.toggle("erase", S.view === "plan" && !!S.staged[id] && S.tool === "erase");
-            w.classList.toggle("next", id === next);
+            w.classList.toggle("next", !!nextSet[id]);
             w.classList.toggle("hl", hl.indexOf(id) > -1);
             w.style.setProperty("--stage", S.tool === "paint" && stagedC ? stagedC.color : "var(--alarm)");
             w.textContent = "";
@@ -598,12 +681,13 @@
                 w.appendChild(tr);
                 w.appendChild(el("span", "timerLeft", fmtTime(tm.left)));
             }
+            if (parts.length > 1 && anyOrder(id)) w.appendChild(el("i", "orderBadge", "\u21C4"));  // any order
             var tipHere = S.view === "run" && S.tip && S.tip.well === id;
             w.classList.toggle("tipHere", !!tipHere);
             if (tipHere) { var ring = el("i", "tipRing"); ring.dataset.state = tipState(); w.appendChild(ring); }
             w.title = id + (parts.length ? "\n" + parts.map(function (p, k) {
-                return (k + 1) + ". " + p.c.name + " \u00B7 " + fmtVol(p.c.volumeUl) + " (" + fmtPct(p.pct) + ")" + (p.done ? "  \u2713" : "");
-            }).join("\n") : "  (empty)");
+                return (anyOrder(id) ? "\u2022 " : (k + 1) + ". ") + p.c.name + " \u00B7 " + fmtVol(p.c.volumeUl) + " (" + fmtPct(p.pct) + ")" + (p.done ? "  \u2713" : "");
+            }).join("\n") + (parts.length > 1 && anyOrder(id) ? "\nAny order" : "") : "  (empty)");
         });
         $("#plateShadow").classList.toggle("alarmed", !!S.run.alarm);
     }
@@ -675,7 +759,7 @@
             toast("Cleared " + wells.length + (wells.length === 1 ? " well." : " wells."));
         } else {
             var c = byId(S.activeId);
-            if (!c) { toast("Select a compound first."); return; }
+            if (!c) { toast("Select a substance first."); return; }
             var last = S.steps[S.steps.length - 1];
             if (last && last.kind === "add" && last.compoundId === c.id) {  // same compound again: grow that step
                 wells.forEach(function (w) { if (last.wells.indexOf(w) < 0) last.wells.push(w); });
@@ -707,7 +791,7 @@
             t.appendChild(tag);
             t.appendChild(el("span", null, c.name));
             t.appendChild(el("span", "muted", "step " + stepNumberFor(c.id)));
-        } else t.appendChild(el("span", null, "Pick a compound on the left"));
+        } else t.appendChild(el("span", null, "Pick a substance on the left"));
         $("#stageConfirm").textContent = S.tool === "erase" ? "Clear wells" : "Add to wells";
         $("#stageConfirm").className = "btn " + (S.tool === "erase" ? "dangerFill" : "primary");
     }
@@ -764,7 +848,7 @@
 
     /* ---------- timer dialog ---------- */
     $("#timerBtn").onclick = function () {
-        if (!S.steps.length) { toast("Add a compound first, then the timer that follows it."); return; }
+        if (!S.steps.length) { toast("Add a substance first, then the timer that follows it."); return; }
         $("#timerAfter").textContent = "Runs after step " + S.steps.length + " (" + stepText(S.steps[S.steps.length - 1]) + ").";
         $("#timerDialog").showModal();
         $("#timerMin").focus();
@@ -798,11 +882,25 @@
             row.appendChild(el("span", "muted", (k + 1) + "."));
             row.appendChild(tag);
             row.appendChild(el("span", null, c.name + " \u00B7 " + fmtVol(c.volumeUl) + " \u00B7 " + fmtPct(parts[k].pct)));
-            var stt = done ? "\u2713 added" : !nextFound && running() ? "next" : "step " + (i + 1);
+            var stt = done ? "\u2713 added" : anyOrder(id) ? (running() ? "to add" : "step " + (i + 1))
+                : !nextFound && running() ? "next" : "step " + (i + 1);
             if (!done) nextFound = true;
             row.appendChild(el("span", "infoState " + (done ? "ok" : ""), stt));
             box.appendChild(row);
         });
+        if (seq.length > 1) {  // the order option only means something with 2+ substances
+            var lab = el("label", "infoOrder"), cb = document.createElement("input");
+            cb.type = "checkbox";
+            cb.checked = !anyOrder(id);
+            lab.appendChild(cb);
+            lab.appendChild(el("span", null, "Must follow this order"));
+            cb.onchange = function () { setAnyOrder([id], !cb.checked); };
+            box.appendChild(lab);
+            var all = el("button", "btn small infoAll", cb.checked ? "Any order for every well" : "Order required for every well");
+            all.type = "button";
+            all.onclick = function () { setAnyOrder(Object.keys(S.seq), cb.checked); box.hidden = true; };
+            box.appendChild(all);
+        }
         var tm = running() ? runningTimerOf(id) : null;
         if (tm) box.appendChild(el("div", "infoRow infoTimer", "\u23F1 Timer: " + fmtTime(tm.left) + " left before step " + (tm.step + 2)));
         box.hidden = false;
@@ -811,6 +909,13 @@
         box.style.top = Math.min(r.top, window.innerHeight - box.offsetHeight - 8) + "px";
     }
     document.addEventListener("pointerdown", function (e) { if (!e.target.closest("#wellInfo, .well")) $("#wellInfo").hidden = true; });
+    function setAnyOrder(wells, on) {
+        api("POST", "/api/anyOrder", { wells: wells, anyOrder: on }).then(function (res) {
+            applyState(res.state);
+            var what = wells.length === 1 ? wells[0] : "Every well";
+            toast(what + (on ? ": any order." : ": must follow its order."));
+        }).catch(fail);
+    }
 
     /* ---------- plan toolbar ---------- */
     $("#toolSeg").onclick = function (e) {
@@ -857,7 +962,7 @@
         a.click();
         a.remove();
         setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
-        toast("Exported " + steps.length + (steps.length === 1 ? " step" : " steps") + " and " + used.length + (used.length === 1 ? " compound." : " compounds."));
+        toast("Exported " + steps.length + (steps.length === 1 ? " step" : " steps") + " and " + used.length + (used.length === 1 ? " substance." : " substances."));
     };
     $("#importBtn").onclick = function () { $("#importFile").value = ""; $("#importFile").click(); };
     $("#importFile").onchange = function (e) {
@@ -873,7 +978,7 @@
             if (data.version > 1) throw new Error("That plan was made by a newer version of this app.");
             var nAdd = data.steps.filter(function (st) { return st && st.kind === "add"; }).length;
             var msg = "Replace the current plan with \"" + f.name + "\"?\n\n" + data.steps.length + " steps, " +
-                data.compounds.length + " compounds. Compounds you already have (same name) are reused; the others are added.";
+                data.compounds.length + " substances. Substances you already have (same name) are reused; the others are added.";
             if (running()) msg += "\n\nThis resets the current run.";
             if (!nAdd || !window.confirm(msg)) { if (!nAdd) toast("That plan has no wells in it."); return; }
             return importPlan(data);
@@ -905,7 +1010,7 @@
             S.staged = {};
             applyState(res.state, true);
             toast("Imported " + res.steps + (res.steps === 1 ? " step" : " steps") +
-                (created ? ", added " + created + (created === 1 ? " new compound" : " new compounds") : "") + "." +
+                (created ? ", added " + created + (created === 1 ? " new substance" : " new substances") : "") + "." +
                 (res.runReset ? " The run was reset." : ""));
         });
     }
@@ -934,19 +1039,34 @@
     /* ---------- run ---------- */
     // Acts as the camera: "a tip with this compound just entered these wells".
     function testDrop(ids, cid) {
-        if (cid == null) { toast("Select a compound first."); return; }
+        if (cid == null) { toast("Select a substance first."); return; }
         if (S.run.status === "draft") { toast("Press Start run first."); return; }
         if (S.run.alarm) { toast("Acknowledge the warning first."); return; }
         api("POST", "/api/testDrop", { wells: ids, compoundId: cid }).then(function (res) {
             applyState(res.state);
-            if (res.accepted === false) toast(res.reason === "runNotStarted" ? "Press Start run first." : "Select a compound first.");
+            if (res.accepted === false) toast(res.reason === "runNotStarted" ? "Press Start run first." : "Select a substance first.");
             else if (res.complete && !res.alarm) toast("Run complete. Every well matches the plan.");
         }).catch(fail);
     }
+    $("#recordBox").onchange = function (e) {
+        var on = e.target.checked;
+        api("POST", "/api/record", { record: on }).then(function (res) {
+            applyState(res.state);
+            toast(on ? "Each run is recorded from Start run (needs the camera running)." : "Runs are no longer recorded.");
+        }).catch(fail);
+    };
+    $("#modeSeg").onclick = function (e) {
+        var b = e.target.closest("button");
+        if (!b || b.dataset.mode === S.mode) return;
+        api("POST", "/api/runMode", { mode: b.dataset.mode }).then(function (res) {
+            applyState(res.state);
+            toast(S.mode === "free" ? "Free run: tap the substance in the tip, its wells light up." : "Guided run: one step at a time.");
+        }).catch(fail);
+    };
     $("#startBtn").onclick = function () {
         api("POST", "/api/run/start", {}).then(function (res) {
             applyState(res.state);
-            toast("Run started. Tap the compound in the tip on the left.");
+            toast("Run started. Tap the substance in the tip on the left.");
         }).catch(fail);
     };
     $("#resetBtn").onclick = function () {
@@ -954,11 +1074,12 @@
         api("POST", "/api/run/reset").then(function (res) { applyState(res.state); toast("Run reset."); }).catch(fail);
     };
     $("#nextWellBtn").onclick = function () {
-        var well = nextWellOfStep(currentStep());
+        var well = freeRun() ? readyFor(S.activeId)[0] : nextWellOfStep(currentStep());
         if (!well) return;
-        api("POST", "/api/run/nextWell", { well: well }).then(function (res) {
+        var body = freeRun() ? { well: well, compoundId: S.activeId } : { well: well };
+        api("POST", "/api/run/nextWell", body).then(function (res) {
             applyState(res.state);
-            var cur = currentStep(), next = nextWellOfStep(cur);
+            var cur = currentStep(), next = freeRun() ? readyFor(S.activeId)[0] : nextWellOfStep(cur);
             toast(well + " dispensed (manual)." + (next ? " Next well: " + next + "."
                 : cur == null ? " Every well is done." : " Timer running."));
         }).catch(function (err) {
@@ -972,6 +1093,26 @@
             toast("Camera told: A1 is " + e.target.options[e.target.selectedIndex].text.toLowerCase() + ".");
         }).catch(fail);
     };
+    // A1 corner: click a corner of the small plate (or "let the camera guess"); same request as the select
+    [].forEach.call(document.querySelectorAll("[data-corner]"), function (b) {
+        b.onclick = function () {
+            var sel = $("#cornerSelect");
+            sel.value = b.dataset.corner;
+            sel.dispatchEvent(new Event("change"));
+        };
+    });
+    // Flip the camera picture: the camera code picks it up within a few seconds, even while running
+    function flipCamera(key) {
+        var body = {};
+        body[key] = !(S.cameraFlip && S.cameraFlip[key]);
+        api("POST", "/api/cameraFlip", body).then(function (res) {
+            applyState(res.state);
+            toast((key === "flipH" ? "Left\u2013right" : "Up\u2013down") + " flip " + (body[key] ? "on." : "off.")
+                + (S.live && S.live.running ? " The camera picks it up in a few seconds." : ""));
+        }).catch(fail);
+    }
+    $("#flipHBtn").onclick = function () { flipCamera("flipH"); };
+    $("#flipVBtn").onclick = function () { flipCamera("flipV"); };
     $("#ackBtn").onclick = function () {
         api("POST", "/api/alarm/ack").then(function (res) { applyState(res.state); }).catch(fail);
     };
@@ -993,46 +1134,85 @@
         if (!n) return;
         var others = S.compounds.filter(function (c) { return c.id !== n.cid; });
         if (others.length) testDrop([n.id], others[Math.floor(Math.random() * others.length)].id);
-        else toast("Add a second compound to test a wrong drop.");
+        else toast("Add a second substance to test a wrong drop.");
     };
 
-    var actx;
-    function chime() {  // a timer finished: softer than the alarm
-        if (!$("#soundBox").checked) return;
+    /* ---------- sounds: synthesized with Web Audio (no files), all through one compressor ----------
+       go (tip over the right well): a bright rising bell pair, "dispense here"
+       warn (staying on a wrong well): a low two-pulse buzzer, repeated while the tip stays
+       dispensed (a drop was counted): a quick rising arpeggio + a soft low pop
+       complete (every well done): a short fanfare; alarm (a mistake was logged): an urgent siren
+       chime (a well's timer ended): two soft bells */
+    var actx, master;
+    function audio() {
+        if (!$("#soundBox").checked) return null;
         try {
-            actx = actx || new (window.AudioContext || window.webkitAudioContext)();
-            [0, 0.25].forEach(function (t, i) {
-                var o = actx.createOscillator(), g = actx.createGain();
-                o.type = "sine";
-                o.frequency.value = i ? 990 : 660;
-                g.gain.value = 0.08;
-                o.connect(g);
-                g.connect(actx.destination);
-                o.start(actx.currentTime + t);
-                o.stop(actx.currentTime + t + 0.3);
-            });
-        } catch (e) {}
+            if (!actx) {
+                actx = new (window.AudioContext || window.webkitAudioContext)();
+                master = actx.createDynamicsCompressor();  // glues the layers together and keeps the peaks safe
+                master.connect(actx.destination);
+            }
+            if (actx.state === "suspended") actx.resume();
+            return actx;
+        } catch (e) { return null; }
     }
-    function beep() {
-        if (!$("#soundBox").checked) return;
-        try {
-            actx = actx || new (window.AudioContext || window.webkitAudioContext)();
-            [0, 0.2].forEach(function (t, i) {
-                var o = actx.createOscillator(), g = actx.createGain();
-                o.type = "square";
-                o.frequency.value = i ? 660 : 880;
-                g.gain.value = 0.05;
-                o.connect(g);
-                g.connect(actx.destination);
-                o.start(actx.currentTime + t);
-                o.stop(actx.currentTime + t + 0.15);
-            });
-        } catch (e) {}
+    // One note. f: Hz, or [from, to] for a glide. at: start (s from now). o: type, gain, attack, lowpass, detune.
+    function note(f, at, len, o) {
+        var a = audio();
+        if (!a) return;
+        o = o || {};
+        var t0 = a.currentTime + (at || 0), osc = a.createOscillator(), g = a.createGain(), out = g;
+        osc.type = o.type || "sine";
+        if (Array.isArray(f)) {
+            osc.frequency.setValueAtTime(f[0], t0);
+            osc.frequency.exponentialRampToValueAtTime(f[1], t0 + len);
+        } else osc.frequency.setValueAtTime(f, t0);
+        if (o.detune) osc.detune.value = o.detune;
+        g.gain.setValueAtTime(0.0001, t0);
+        g.gain.exponentialRampToValueAtTime(o.gain || 0.15, t0 + (o.attack || 0.005));
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + len);
+        osc.connect(g);
+        if (o.lowpass) {
+            var flt = a.createBiquadFilter();
+            flt.type = "lowpass";
+            flt.frequency.value = o.lowpass;
+            g.connect(flt);
+            out = flt;
+        }
+        out.connect(master);
+        osc.start(t0);
+        osc.stop(t0 + len + 0.05);
+    }
+    function bell(f, at, len, gain) {  // glassy: the note + two quiet inharmonic partials
+        note(f, at, len, { gain: gain });
+        note(f * 2.76, at, len * 0.5, { gain: gain * 0.22 });
+        note(f * 5.4, at, len * 0.25, { gain: gain * 0.07 });
+    }
+    function goSound() { bell(1046.5, 0, 0.35, 0.16); bell(1568, 0.09, 0.5, 0.16); }  // C6 -> G6
+    function warnSound() {  // dissonant low buzz, falling: "no"
+        [0, 0.2].forEach(function (at) {
+            note([233, 196], at, 0.17, { type: "sawtooth", gain: 0.13, lowpass: 1500 });
+            note([247, 207], at, 0.17, { type: "sawtooth", gain: 0.1, lowpass: 1500 });
+        });
+    }
+    function dispensedSound() {  // C6 E6 G6 C7 arpeggio + a soft pop underneath
+        note([190, 60], 0, 0.14, { gain: 0.22 });
+        [1046.5, 1318.5, 1568, 2093].forEach(function (f, k) { bell(f, 0.03 + k * 0.06, 0.45, 0.11); });
+    }
+    function completeSound() {  // fanfare: C5 E5 G5 C6, then the chord rings
+        [523.25, 659.25, 784, 1046.5].forEach(function (f, k) { bell(f, k * 0.12, 0.5, 0.13); });
+        [523.25, 784, 1318.5].forEach(function (f) { note(f, 0.5, 1.6, { type: "triangle", gain: 0.06, attack: 0.04 }); });
+    }
+    function chime() { bell(880, 0, 0.6, 0.1); bell(1318.5, 0.22, 0.8, 0.1); }  // a timer finished: A5 -> E6
+    function beep() {  // a logged mistake: urgent two-tone siren, 3 times
+        [0, 0.18, 0.36].forEach(function (at, k) {
+            note(k % 2 ? 660 : 880, at, 0.16, { type: "square", gain: 0.08, lowpass: 2600 });
+        });
     }
 
     /* ---------- live tip (camera or Camera Simulator) ----------
        The server says which well the tip is over and what a drop there would be for the compound in the tip:
-       ok = green ring + a soft ding, a mistake = red ring; staying TIP_WARN_S on a wrong well = about to
+       ok = green ring + the go sound, a mistake = red ring; staying TIP_WARN_S on a wrong well = about to
        dispense: flashing + warning sound, before anything is dropped. */
     var TIP_WARN_S = 0.7;
     var TIP_TEXT = {
@@ -1060,7 +1240,7 @@
             S.tipDanger = false;
         }
         var turnedRight = t.kind === "ok" && (t.well !== prev.well || prev.kind !== "ok");
-        if (turnedRight && now - (lastDing[t.well] || 0) > 1500) { ding(); lastDing[t.well] = now; }
+        if (turnedRight && now - (lastDing[t.well] || 0) > 1500) { goSound(); lastDing[t.well] = now; }
         S.tip = t;
         if (!tipBad(t)) S.tipDanger = false;
         if (!fromState) { updateCells(); renderTip(); }  // a full state renders everything anyway
@@ -1080,42 +1260,27 @@
         bar.dataset.state = tipState();
         $("#tipWell").textContent = t.well || "";
         var text = !t.well ? "Not over a well"
-            : !t.kind ? (S.run.status === "draft" ? "Press Start run to check wells" : "Pick the compound in the tip on the left")
+            : !t.kind ? (S.run.status === "draft" ? "Press Start run to check wells" : "Pick the substance in the tip on the left")
             : (TIP_TEXT[t.kind] || function () { return t.kind; })(t);
         $("#tipText").textContent = (S.tipDanger ? "STOP, about to dispense. " : "") + text;
     }
-    function tone(freqs, type, gain, len, gap) {
-        if (!$("#soundBox").checked) return;
-        try {
-            actx = actx || new (window.AudioContext || window.webkitAudioContext)();
-            freqs.forEach(function (f, i) {
-                var o = actx.createOscillator(), g = actx.createGain(), t0 = actx.currentTime + i * gap;
-                o.type = type;
-                o.frequency.value = f;
-                g.gain.setValueAtTime(gain, t0);
-                g.gain.exponentialRampToValueAtTime(0.0001, t0 + len);
-                o.connect(g);
-                g.connect(actx.destination);
-                o.start(t0);
-                o.stop(t0 + len);
-            });
-        } catch (e) {}
-    }
-    function ding() { tone([784, 1175], "sine", 0.09, 0.22, 0.1); }  // right well: soft rising two-note
-    function warnSound() { tone([440, 440, 440], "square", 0.06, 0.09, 0.13); }  // about to dispense wrong: 3 fast pulses
-
     var PILL = { draft: "Not started", active: "Running", complete: "Complete", alarm: "Check well", wait: "Timer running" };
     function stat(label, valueEl) { var d = el("div", "runStat"); d.appendChild(el("span", "runLabel", label)); d.appendChild(valueEl); return d; }
     function renderRun() {
         var status = S.run.status, cur = currentStep(), curSt = cur == null ? null : S.steps[cur];
         var p = S.run.progress || { done: 0, total: 0 }, total = 0, d = 0;
         S.steps.forEach(function (st, i) { if (st.kind === "add") st.wells.forEach(function (w) { total++; if (stepDone(i, w)) d++; }); });
-        var nextW = nextWellOfStep(cur), held = nextW ? null : waitingTimer(cur);
+        var free = freeRun(), ready = free ? readyFor(S.activeId) : [];
+        var nextW = free ? ready[0] || null : nextWellOfStep(cur);
+        var held = nextW ? null : free ? heldFor(S.activeId) : waitingTimer(cur);
         var pill = $("#runPill"), state = S.run.alarm ? "alarm" : held ? "wait" : status;
         pill.dataset.state = state;
         pill.textContent = PILL[state];
         $("#stepNow").textContent = !running() ? S.steps.length + (S.steps.length === 1 ? " step" : " steps")
-            : cur == null ? "All steps done" : "Step " + (cur + 1) + " of " + S.steps.length;
+            : cur == null ? "All steps done" : free ? "Free run: any substance" : "Step " + (cur + 1) + " of " + S.steps.length;
+        $("#recPill").hidden = !(S.camera && S.camera.recording);
+        $("#recPill").title = S.camera && S.camera.recording ? "Recording: " + S.camera.recording : "";
+        [].forEach.call($("#modeSeg").children, function (b) { b.setAttribute("aria-pressed", String(b.dataset.mode === S.mode)); });
 
         var pt = $("#progText");
         pt.replaceChildren();
@@ -1135,12 +1300,16 @@
         if (c) {
             tv.appendChild(el("span", "bigName", c.name));
             tv.appendChild(el("span", "muted", fmtVol(c.volumeUl)));
-        } else tv.appendChild(el("span", "muted", "Tap a compound on the left"));
+        } else tv.appendChild(el("span", "muted", "Tap a substance on the left"));
         tip.appendChild(tv);
-        if (curSt && curSt.kind === "add" && curSt.compoundId !== S.activeId && byId(curSt.compoundId)) {
-            tip.appendChild(el("span", "tipWarn", "Step " + (cur + 1) + " needs " + byId(curSt.compoundId).name));
-            tip.classList.add("wrong");
-        } else tip.classList.remove("wrong");
+        var warn = null;
+        if (free) {  // free run: warn only when no well can take this substance now
+            if (c && running() && cur != null && !ready.length) warn = held ? "Wells on a timer" : "No well needs this now";
+        } else if (curSt && curSt.kind === "add" && curSt.compoundId !== S.activeId && byId(curSt.compoundId)) {
+            warn = "Step " + (cur + 1) + " needs " + byId(curSt.compoundId).name;
+        }
+        if (warn) tip.appendChild(el("span", "tipWarn", warn));
+        tip.classList.toggle("wrong", !!warn);
 
         // Next: the well, or the timer countdown
         var nx = $("#nextWell"), nv = el("span", "bigValue");
@@ -1149,7 +1318,13 @@
         if (held) {  // every well left in this step is still on its timer
             nx.replaceChildren(el("span", "runLabel", "Timer"));
             nv.appendChild(el("span", "nextId timer", fmtTime(held.left)));
-            nv.appendChild(el("span", "muted", "then " + held.well + ": " + (byId(curSt.compoundId) || { name: "?" }).name));
+            var heldC = free ? byId(S.activeId) : byId(curSt.compoundId);
+            nv.appendChild(el("span", "muted", "then " + held.well + ": " + (heldC || { name: "?" }).name));
+        } else if (free && running() && cur != null) {  // free run: how many wells take what is in the tip
+            nx.replaceChildren(el("span", "runLabel", ready.length === 1 ? "Well for the tip" : "Wells for the tip"));
+            nv.appendChild(el("span", "nextId", ready.length ? String(ready.length) : "\u2013"));
+            nv.appendChild(el("span", "muted", ready.length ? ready.slice(0, 4).join(", ") + (ready.length > 4 ? " \u2026" : "")
+                : "pick another substance"));
         } else {
             nx.replaceChildren(el("span", "runLabel", "Next well"));
             if (!running()) nv.appendChild(el("span", "muted", "Press Start run"));
@@ -1167,8 +1342,12 @@
         $("#testOkBtn").disabled = $("#testBadBtn").disabled = !running() || !total;
 
         var sum = $("#setupSummary"), corner = $("#cornerSelect");
-        sum.textContent = S.a1Corner === "auto" ? "A1 corner not set" : "Camera & test \u00B7 A1 " + corner.options[corner.selectedIndex].text.toLowerCase();
-        sum.classList.toggle("warn", S.a1Corner === "auto");
+        $("#a1Badge").hidden = S.a1Corner !== "auto";  // the button keeps its name; a badge says the corner is not set
+        sum.title = S.a1Corner === "auto" ? "Well A1 corner not set" : "A1: " + corner.options[corner.selectedIndex].text.toLowerCase();
+        [].forEach.call(document.querySelectorAll("[data-corner]"), function (b) { b.setAttribute("aria-pressed", String(b.dataset.corner === S.a1Corner)); });
+        var fl = S.cameraFlip || {};
+        $("#flipHBtn").setAttribute("aria-pressed", String(!!fl.flipH));
+        $("#flipVBtn").setAttribute("aria-pressed", String(!!fl.flipV));
     }
     // Well timers count down on the page (rings updated in place every 0.5 s); a well whose timer ends chimes.
     var timersSeen = {}, ringWells = "";
@@ -1184,7 +1363,7 @@
         });
         if (ready.length) {
             chime();
-            toast(ready.length === 1 ? ready[0] + " timer done: it is ready for its next compound." : ready.length + " wells ready: " + ready.sort(colMajor).join(", ") + ".");
+            toast(ready.length === 1 ? ready[0] + " timer done: it is ready for its next substance." : ready.length + " wells ready: " + ready.sort(colMajor).join(", ") + ".");
         }
         var key = now.join(",");
         if (key !== ringWells || ready.length) { ringWells = key; updateCells(); }  // a timer started or ended
@@ -1246,6 +1425,73 @@
         } catch (e) { toast("Copy blocked. Select the text and copy it manually."); }
     };
 
+    /* ---------- live camera (Start camera: the server runs scripts/live_demo.py) ---------- */
+    var liveBusy = false, liveSeenExit = null;
+    try { $("#cameraInput").value = localStorage.getItem("pipetteCoach.camera") || "0"; } catch (e) { /* storage blocked */ }
+    function renderLive() {
+        var L = S.live || {}, btn = $("#liveBtn");
+        btn.classList.toggle("on", !!L.running);
+        btn.disabled = liveBusy;
+        $("#liveText").textContent = L.running
+            ? (S.camera && S.camera.online ? "Camera live · Stop" : "Camera starting… · Stop")
+            : "Start camera";
+        var key = L.running ? null : L.exitCode;  // tell once when it stopped by itself with an error
+        if (key != null && key !== 0 && key !== -15 && liveSeenExit !== key + ":" + (L.log || []).join("|")) {
+            liveSeenExit = key + ":" + (L.log || []).join("|");
+            toast("The camera stopped: " + ((L.log || []).slice(-1)[0] || "exit code " + key) + " (full log: data/liveCamera.log)");
+        }
+    }
+    // Find cameras: the server opens each camera for a moment and sends a small snapshot, so you can tell them apart
+    var cameras = [];
+    function renderCameras() {
+        var list = $("#camList"), chosen = $("#cameraInput").value.trim();
+        list.innerHTML = "";
+        cameras.forEach(function (c) {
+            var b = document.createElement("button"), img = document.createElement("img"), t = document.createElement("b"), d = document.createElement("span");
+            b.type = "button";
+            b.className = "camOpt";
+            b.setAttribute("aria-pressed", String(chosen === String(c.index)));
+            img.src = c.thumb;
+            img.alt = "";
+            t.textContent = "Camera " + c.index + (c.name ? " \u00B7 " + c.name : "");
+            d.textContent = c.width + " \u00D7 " + c.height;
+            b.append(img, t, d);
+            b.onclick = function () { setCamera(String(c.index)); };
+            list.append(b);
+        });
+    }
+    function setCamera(v) {
+        $("#cameraInput").value = v;
+        try { localStorage.setItem("pipetteCoach.camera", v); } catch (e) { /* storage blocked */ }
+        renderCameras();
+    }
+    $("#cameraInput").oninput = function () { setCamera($("#cameraInput").value.trim()); };
+    $("#findCamBtn").onclick = function () {
+        var btn = $("#findCamBtn");
+        btn.disabled = true;
+        btn.textContent = "Looking\u2026";
+        api("GET", "/api/live/cameras").then(function (res) {
+            cameras = res.cameras || [];
+            renderCameras();
+            toast(cameras.length ? cameras.length + (cameras.length === 1 ? " camera found." : " cameras found. Click the one that sees the plate.")
+                : "No camera found. Is one plugged in, and is camera access allowed for Terminal?");
+        }).catch(fail).then(function () { btn.disabled = false; btn.textContent = "Find cameras"; });
+    };
+
+    $("#liveBtn").onclick = function () {
+        var running = S.live && S.live.running, cam = $("#cameraInput").value.trim() || "0";
+        try { localStorage.setItem("pipetteCoach.camera", cam); } catch (e) { /* storage blocked */ }
+        liveBusy = true;
+        renderLive();
+        var call = running ? api("POST", "/api/live/stop")
+            : api("POST", "/api/live/start", { camera: cam, show: $("#liveWindowBox").checked });
+        call.then(function (res) {
+            liveBusy = false;
+            applyState(res.state);
+            toast(running ? "Camera stopped." : "Starting camera " + cam + "… the models take a few seconds to load.");
+        }).catch(function (err) { liveBusy = false; renderLive(); fail(err); });
+    };
+
     function renderAll() {
         renderList();
         renderEditorState();
@@ -1257,6 +1503,7 @@
         renderBanner();
         renderTip();
         renderLink();
+        renderLive();
         renderRecords();
     }
 

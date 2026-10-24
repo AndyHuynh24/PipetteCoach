@@ -3,7 +3,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from pipette_coach.ui_link import UiLink, rows_toward_for
+from pipette_coach.ui_link import UiLink, flip_code_for, rows_toward_for
 
 
 class FakeUi(BaseHTTPRequestHandler):
@@ -11,6 +11,7 @@ class FakeUi(BaseHTTPRequestHandler):
 
     calls: list = []
     corner = "bottomLeft"
+    record = False
 
     def _answer(self, body: dict) -> None:
         self.send_response(200)
@@ -19,7 +20,8 @@ class FakeUi(BaseHTTPRequestHandler):
 
     def do_GET(self):
         FakeUi.calls.append(("GET", self.path, None, self.headers.get("X-Api-Token")))
-        self._answer({"a1Corner": FakeUi.corner})
+        self._answer({"a1Corner": FakeUi.corner, "cameraFlip": {"flipH": True, "flipV": False},
+                      "record": FakeUi.record, "status": "active", "startedAt": 123.5})
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
@@ -42,6 +44,12 @@ def test_rows_toward_for_each_corner():
     assert rows_toward_for("auto") is None and rows_toward_for(None) is None
 
 
+def test_flip_code_for_page_buttons():
+    assert flip_code_for({"flipH": True}) == 1 and flip_code_for({"flipV": True}) == 0
+    assert flip_code_for({"flipH": True, "flipV": True}) == -1
+    assert flip_code_for({}) is None and flip_code_for(None) is None
+
+
 def test_reports_reach_the_server_without_blocking_and_corner_is_read():
     FakeUi.calls.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), FakeUi)
@@ -49,6 +57,7 @@ def test_reports_reach_the_server_without_blocking_and_corner_is_read():
     try:
         link = UiLink(f"http://127.0.0.1:{server.server_address[1]}", token="tok").start()
         assert link.rows_toward == "right"  # bottomLeft, read once before the camera starts
+        assert link.flip == 1  # left-right flip set on the page
         t0 = time.perf_counter()
         link.report("A1")
         link.report("B1")
@@ -89,4 +98,24 @@ def test_tip_sends_changes_only_and_ignores_short_dropouts():
         tips = [c[2]["well"] for c in FakeUi.calls if c[1] == "/api/camera/tip"]
         assert tips == ["B4", "C4", None] and link.errors == []
     finally:
+        server.shutdown()
+
+
+def test_record_setting_is_read_and_recording_is_reported():
+    FakeUi.calls.clear()
+    FakeUi.record = True
+    server = ThreadingHTTPServer(("127.0.0.1", 0), FakeUi)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        link = UiLink(f"http://127.0.0.1:{server.server_address[1]}", heartbeat_s=0.1).start()
+        assert link.record_run == 123.5  # "Record each run" on and the run going: record it
+        link.recording = "run_120000.mp4"
+        for _ in range(20):  # tips keep the queue busy: the heartbeat still goes out on time
+            link.tip(f"A{_ % 3 + 1}")
+            time.sleep(0.02)
+        link.stop()
+        beats = [c[2] for c in FakeUi.calls if c[1] == "/api/camera/heartbeat"]
+        assert beats[0] == {"recording": None} and {"recording": "run_120000.mp4"} in beats
+    finally:
+        FakeUi.record = False
         server.shutdown()

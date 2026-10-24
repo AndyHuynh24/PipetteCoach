@@ -1,0 +1,16 @@
+{
+    "name": "PipetteCoach",
+    "short_name": "PipetteCoach",
+    "description": "Plan a 96-well plate and let the camera check every dispense.",
+    "id": "/",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "background_color": "#F3F5F7",
+    "theme_color": "#0F766E",
+    "icons": [
+        {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png"},
+        {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"},
+        {"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml"}
+    ]
+}

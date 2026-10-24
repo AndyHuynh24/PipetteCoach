@@ -134,3 +134,16 @@ def test_dwell_without_trip_rule_logs_each_well_of_one_pass():
     for i in range(90):  # tip never leaves the plate: 1 s each on D2, D3, D4
         out.append(d.update(i / 30, [(1, 3), (2, 3), (3, 3)][i // 30]))
     assert [e for e in out if e is not None] == [(1, 3), (2, 3), (3, 3)]
+
+
+def test_dwell_two_seconds_is_a_dispense():
+    """live_demo's default (no liquid model): 2 s on one well = dispensed; a short tip dropout does not restart."""
+    from pipette_coach.tips import DwellDetector
+
+    d = DwellDetector(min_s=2.0, gap_s=0.5, trip_gap_s=None)
+    t = [k / 30 for k in range(90)]  # 3 s at 30 fps on A1, the tip missed between 1.0 and 1.3 s
+    out = [(round(x, 2), d.update(x, None if 1.0 <= x < 1.3 else (0, 0))) for x in t]
+    fired = [(x, w) for x, w in out if w is not None]
+    assert fired == [(2.0, (0, 0))]  # once, at the 2 s mark
+    d2 = DwellDetector(min_s=2.0, gap_s=0.5, trip_gap_s=None)
+    assert all(d2.update(k / 30, (1, 1)) is None for k in range(57))  # 1.9 s of hovering: not a dispense

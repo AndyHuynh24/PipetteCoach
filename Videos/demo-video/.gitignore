@@ -1,0 +1,10 @@
+node_modules
+dist
+.DS_Store
+.env
+
+# Ignore the output video from Git but not videos you import into src/.
+out
+
+# Source footage copies (large; regenerate from ../SOURCE *.MOV with ffmpeg, see README-edit.md)
+public/*.mp4
