@@ -4,140 +4,51 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Well Plate UI</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%3E%3Crect%20width%3D%2224%22%20height%3D%2224%22%20rx%3D%226%22%20fill%3D%22%230F766E%22%2F%3E%20%3Cg%20fill%3D%22%23fff%22%20transform%3D%22translate(6.8%2017.2)%20rotate(45)%20scale(0.7)%22%3E%20%3Cpath%20d%3D%22M-0.9%20-6h1.8l-0.6%205.4c-0.1%200.5-0.5%200.5-0.6%200z%22%2F%3E%20%3Crect%20x%3D%22-1.1%22%20y%3D%22-9.7%22%20width%3D%222.2%22%20height%3D%224%22%20rx%3D%220.5%22%2F%3E%20%3Crect%20x%3D%22-2.5%22%20y%3D%22-18%22%20width%3D%225%22%20height%3D%228.7%22%20rx%3D%222%22%2F%3E%20%3Cpath%20d%3D%22M2.5%20-16.6c2.2%200%202.4%202.8%200%203.2%22%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%221.8%22%20stroke-linecap%3D%22round%22%2F%3E%20%3Crect%20x%3D%22-0.5%22%20y%3D%22-19.6%22%20width%3D%221%22%20height%3D%221.9%22%2F%3E%20%3Crect%20x%3D%22-1.4%22%20y%3D%22-21%22%20width%3D%222.8%22%20height%3D%221.7%22%20rx%3D%220.7%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body data-view="plan">
 <div class="app">
-    <!-- LEFT: compound library (1/5) -->
-    <aside class="lib" aria-label="Compound library">
-        <header class="brand">
-            <h1>Well Plate UI</h1>
-            <p>Plate Tracker</p>
-        </header>
-        <div class="libTools">
-            <input class="field" id="searchBox" type="search" placeholder="Search compounds" aria-label="Search compounds">
+    <!-- TOP: brand, the three views (with icons), connection status -->
+    <header class="topBar">
+        <div class="brand">
+            <!-- Logo: a tilted pipette on the teal square, + the name as text -->
+            <svg class="brandMark" viewBox="0 0 24 24" aria-hidden="true">
+                <rect width="24" height="24" rx="6" fill="currentColor"/>
+                <g fill="#fff" transform="translate(6.8 17.2) rotate(45) scale(0.7)">
+                    <path d="M-0.9 -6h1.8l-0.6 5.4c-0.1 0.5-0.5 0.5-0.6 0z"/>
+                    <rect x="-1.1" y="-9.7" width="2.2" height="4" rx="0.5"/>
+                    <rect x="-2.5" y="-18" width="5" height="8.7" rx="2"/>
+                    <path d="M2.5 -16.6c2.2 0 2.4 2.8 0 3.2" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/>
+                    <rect x="-0.5" y="-19.6" width="1" height="1.9"/>
+                    <rect x="-1.4" y="-21" width="2.8" height="1.7" rx="0.7"/>
+                </g>
+            </svg>
+            <span class="brandName">Well Plate</span>
         </div>
-        <p class="libHint runOnly">Tap the compound that is in the tip now.</p>
-        <ul class="list" id="compoundList"></ul>
-        <section class="editor" id="editor" aria-label="Add or edit compound">
-            <div class="editorHead" id="editorTitle">Add compound</div>
-            <div class="row">
-                <input class="field" id="nameField" placeholder="Compound name" aria-label="Compound name" maxlength="40">
-                <input class="field tagField" id="tagField" placeholder="Tag" aria-label="Short tag" maxlength="4">
-            </div>
-            <div class="row">
-                <input class="field volField" id="volField" type="number" min="0" step="0.5" value="8" aria-label="Volume in microliters">
-                <span class="unit">µL</span>
-            </div>
-            <div class="colorPick">
-                <span class="colorLabel">Color</span>
-                <div class="swatches" id="swatches"></div>
-                <label class="customColor" title="Pick any color">
-                    <input type="color" id="colorField" value="#8E5CD9" aria-label="Custom compound color">
-                    <span>Custom</span>
-                </label>
-                <input class="field hexField" id="hexField" maxlength="7" spellcheck="false" aria-label="Color as hex, like #2F6FDE">
-            </div>
-            <div class="row">
-                <button class="btn primary" id="saveBtn">Add</button>
-                <button class="btn" id="cancelBtn" hidden>Cancel</button>
-            </div>
-        </section>
-    </aside>
-
-    <!-- RIGHT: plate (4/5) -->
-    <main class="stage">
-        <div class="topBar">
-            <div class="tabs" role="tablist">
-                <button class="tab" role="tab" data-tab="plan" aria-selected="true">Plan</button>
-                <button class="tab" role="tab" data-tab="run" aria-selected="false">Run</button>
-                <button class="tab" role="tab" data-tab="records" aria-selected="false">Records</button>
-            </div>
-            <div class="linkInfo">
-                <span class="linkItem"><i class="linkDot" id="serverDot"></i><span id="serverText">Connecting…</span></span>
-                <span class="linkItem"><i class="linkDot" id="aiDot"></i><span id="aiText">Camera: not connected</span></span>
-                <a class="linkItem simLink" href="/camera" target="cameraSimulator" title="A fake camera in another tab: hover, select and dispense into wells yourself">Camera simulator &#8599;</a>
-            </div>
-        </div>
-
-        <div class="controls planOnly">
-            <div class="control">
-                <label>Tool</label>
-                <div class="segmented" id="toolSeg">
-                    <button data-tool="paint" aria-pressed="true">Paint</button>
-                    <button data-tool="erase" aria-pressed="false">Erase</button>
-                    <button data-tool="inspect" aria-pressed="false" title="Click a well to see what goes into it (right-click works with any tool)">Inspect</button>
-                </div>
-            </div>
-            <div class="control">
-                <button class="btn" id="timerBtn">&#9201;&#xFE0E; Add timer</button>
-                <button class="btn danger" id="clearBtn">Clear plate</button>
-            </div>
-            <span class="spacer"></span>
-            <span class="hint" id="planHint">Select wells (tap or drag), then Confirm. To see what is in a well: Inspect, or right-click it.</span>
-        </div>
-
-        <div class="stageBar planOnly" id="stageBar" hidden>
-            <span id="stageText"></span>
-            <span class="spacer"></span>
-            <button class="btn" id="stageCancel">Cancel</button>
-            <button class="btn primary" id="stageConfirm">Confirm</button>
-        </div>
-
-        <div class="runBar runOnly">
-            <div class="runStat runState">
-                <span class="statusPill" id="runPill">Not started</span>
-                <span class="stepNow" id="stepNow"></span>
-            </div>
-            <div class="runStat tipStat" id="inTip"></div>
-            <div class="runStat nextStat" id="nextWell"></div>
-            <span class="spacer"></span>
-            <div class="runStat progress">
-                <span class="runLabel">Progress</span>
-                <span id="progText"></span>
-                <div class="progTrack"><i id="progBar"></i></div>
-            </div>
-            <div class="runActions">
-                <button class="btn primary big" id="startBtn">Start run</button>
-                <button class="btn" id="nextWellBtn" title="Count the outlined well as dispensed (overrides the camera) and go to the next well">Next well &#9656;</button>
-                <button class="btn" id="resetBtn">Reset run</button>
-            </div>
-        </div>
-
-        <div class="tipBar runOnly" id="tipBar" aria-live="polite" hidden>
-            <span class="runLabel">Tip</span>
-            <span class="tipWell" id="tipWell"></span>
-            <span id="tipText"></span>
-        </div>
-
-        <div class="banner" id="banner" role="alert" hidden>
-            <span class="bannerMark">!</span>
-            <div class="bannerText"><strong id="bannerTitle"></strong><span id="bannerMsg"></span></div>
-            <button class="btn" id="ackBtn">Acknowledge</button>
-        </div>
-
-        <section class="plateView" id="viewPlate">
-            <div class="plateWrap" id="plateWrap">
-                <div class="plateShadow" id="plateShadow"><div class="plate" id="plate"></div></div>
-            </div>
-            <aside class="steps" aria-label="Protocol steps">
-                <h2>Protocol</h2>
-                <ol class="stepList" id="stepList"></ol>
-                <p class="hint" id="stepsEmpty">No steps yet. Select wells and press Confirm to add the first compound.</p>
-                <p class="hint stepsNote planOnly">Wells with several compounds show one band per compound, top to bottom in the order they are added. Hover a well for details.</p>
-            </aside>
-        </section>
-
-        <div class="runFoot runOnly">
+        <nav class="tabs" role="tablist" aria-label="View">
+            <button class="tab" role="tab" data-tab="plan" aria-selected="true">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h4v4H4zm6 0h4v4h-4zm6 0h4v4h-4zM4 10h4v4H4zm6 0h4v4h-4zm6 0h4v4h-4zM4 16h4v4H4zm6 0h4v4h-4zm6 0h4v4h-4z"/></svg>
+                Plan
+            </button>
+            <button class="tab" role="tab" data-tab="run" aria-selected="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+                Run
+            </button>
+            <button class="tab" role="tab" data-tab="records" aria-selected="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z"/></svg>
+                Records
+            </button>
+        </nav>
+        <span class="spacer"></span>
+        <div class="headRun runOnly">
             <div class="legend" aria-label="Legend">
                 <span><i class="lg planned"></i>To add</span>
                 <span><i class="lg next"></i>Next well</span>
                 <span><i class="lg done">&#10003;</i>All added</span>
-                <span><i class="lg stripes"></i>Several compounds</span>
                 <span><i class="lg timerLg"></i>Timer running</span>
                 <span><i class="lg err">!</i>Check</span>
             </div>
-            <span class="spacer"></span>
             <details class="setup" id="setup">
                 <summary id="setupSummary">Camera &amp; test</summary>
                 <div class="setupBody">
@@ -159,6 +70,96 @@
                 </div>
             </details>
         </div>
+        <div class="linkInfo" hidden>
+            <span class="linkItem"><i class="linkDot" id="serverDot"></i><span id="serverText">Connecting…</span></span>
+            <span class="linkItem"><i class="linkDot" id="aiDot"></i><span id="aiText">Camera: not connected</span></span>
+            <a class="linkItem simLink" href="/camera" target="cameraSimulator" title="A fake camera in another tab">Simulator &#8599;</a>
+        </div>
+    </header>
+
+    <!-- LEFT: compounds (this list is also the color legend), with its search right above it -->
+    <aside class="lib" aria-label="Compounds">
+        <button class="btn primary newBtn planOnly" id="newCompoundBtn" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+            New compound
+        </button>
+        <div class="tools planOnly" aria-label="Plate tools">
+            <div class="segmented toolSeg" id="toolSeg" role="group" aria-label="Tool">
+                <button data-tool="paint" aria-pressed="true" title="Select wells to add the chosen compound"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14c-1.66 0-3 1.34-3 3 0 1.31-1.16 2-2 2 .92 1.22 2.49 2 4 2 2.21 0 4-1.79 4-4 0-1.66-1.34-3-3-3zm13.71-9.37-1.34-1.34a.996.996 0 0 0-1.41 0L9 12.25 11.75 15l8.96-8.96a.996.996 0 0 0 0-1.41z"/></svg><span>Paint</span></button>
+                <button data-tool="erase" aria-pressed="false" title="Select wells to clear"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.24 3.56l4.95 4.94c.78.79.78 2.05 0 2.84L12 20.53a4.008 4.008 0 0 1-5.66 0L2.81 17c-.78-.79-.78-2.05 0-2.84l10.6-10.6c.79-.78 2.05-.78 2.83 0zM4.22 15.58l3.54 3.53c.78.79 2.04.79 2.83 0l3.53-3.53-4.95-4.95-4.95 4.95z"/></svg><span>Erase</span></button>
+                <button data-tool="inspect" aria-pressed="false" title="Click a well to see what goes into it (right-click works with any tool)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg><span>Inspect</span></button>
+            </div>
+            <div class="toolRow">
+                <button class="btn iconBtn" id="timerBtn" title="Add a wait after the last step"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 1H9v2h6V1zm-4 13h2V8h-2v6zm8.03-6.61 1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42A8.962 8.962 0 0 0 12 4c-4.97 0-9 4.03-9 9s4.02 9 9 9 9-4.03 9-9c0-2.12-.74-4.07-1.97-5.61zM12 20c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/></svg><span>Add timer</span></button>
+                <button class="btn iconBtn danger" id="clearBtn" title="Remove every step and timer"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg><span>Clear plate</span></button>
+            </div>
+            <div class="toolRow">
+                <button class="btn iconBtn" id="importBtn" title="Load a plan file someone exported (.json)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20h14v-2H5v2zm7-4 5.5-5.5-1.41-1.41L13 12.17V2h-2v10.17L7.91 9.09 6.5 10.5 12 16z"/></svg><span>Import</span></button>
+                <button class="btn iconBtn" id="exportBtn" title="Save this plan as a file to share (.json)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20h14v-2H5v2zm7-18-5.5 5.5 1.41 1.41L11 5.83V16h2V5.83l3.09 3.08 1.41-1.41L12 2z"/></svg><span>Export</span></button>
+                <input type="file" id="importFile" accept=".json,application/json" hidden>
+            </div>
+        </div>
+        <div class="libHead">
+            <h2>Compounds</h2>
+        </div>
+        <label class="searchBox">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+            <input id="searchBox" type="search" placeholder="Search compounds" aria-label="Search compounds">
+        </label>
+        <p class="libHint runOnly">Tap the compound in the tip.</p>
+        <ul class="list" id="compoundList"></ul>
+    </aside>
+
+    <!-- CENTER + RIGHT -->
+    <main class="stage">
+        <div class="runBar runOnly" aria-label="Run status">
+            <div class="runStat runState">
+                <span class="statusPill" id="runPill">Not started</span>
+                <span class="stepNow" id="stepNow"></span>
+            </div>
+            <div class="runStat tipStat" id="inTip"></div>
+            <div class="tipBar runOnly idle" id="tipBar" aria-live="polite">
+            <span class="runLabel">Tip</span>
+            <span class="tipWell" id="tipWell"></span>
+            <span id="tipText"></span>
+        </div>
+
+            <div class="runStat nextStat" id="nextWell"></div>
+            <span class="spacer"></span>
+            <div class="runStat progress">
+                <span class="runLabel">Progress</span>
+                <span id="progText"></span>
+                <div class="progTrack"><i id="progBar"></i></div>
+            </div>
+            <div class="runActions">
+                <button class="btn primary big" id="startBtn">Start run</button>
+                <button class="btn" id="nextWellBtn" title="Count the outlined well as dispensed (overrides the camera) and go to the next well">Next well &#9656;</button>
+                <button class="btn" id="resetBtn">Reset run</button>
+            </div>
+        </div>
+        <div class="banner" id="banner" role="alert" hidden>
+            <span class="bannerMark">!</span>
+            <div class="bannerText"><strong id="bannerTitle"></strong><span id="bannerMsg"></span></div>
+            <button class="btn" id="ackBtn">Acknowledge</button>
+        </div>
+
+        <section class="plateView" id="viewPlate">
+            <div class="plateWrap" id="plateWrap">
+                <div class="plateShadow" id="plateShadow"><div class="plate" id="plate"></div></div>
+                <!-- Selection bar: always sits right under the plate (space is reserved, so nothing jumps) -->
+                <div class="stageBar planOnly idle" id="stageBar" aria-live="polite">
+                    <span id="stageText"></span>
+                    <button class="btn" id="stageCancel">Cancel</button>
+                    <button class="btn primary" id="stageConfirm">Confirm</button>
+                </div>
+            </div>
+            <aside class="steps" aria-label="Protocol steps">
+                <h2>Protocol</h2>
+                <ol class="stepList" id="stepList"></ol>
+                <p class="hint" id="stepsEmpty">No steps yet. Pick a compound, select wells, then Confirm.</p>
+            </aside>
+        </section>
+
 
         <section class="records" id="viewRecords" hidden>
             <div>
@@ -178,6 +179,38 @@
         </section>
     </main>
 </div>
+
+<!-- Add / edit compound (opened by "+ New" or a compound's ⋯ > Edit) -->
+<dialog class="dialog" id="compoundDialog" aria-labelledby="editorTitle">
+    <section class="editor" id="editor">
+        <h2 id="editorTitle">New compound</h2>
+        <label class="fieldLabel">Name
+            <input class="field" id="nameField" placeholder="e.g. IL-6 standard" maxlength="40">
+        </label>
+        <div class="row">
+            <label class="fieldLabel tagLabel">Tag
+                <input class="field tagField" id="tagField" placeholder="STD" maxlength="4">
+            </label>
+            <label class="fieldLabel">Volume per well
+                <span class="volWrap"><input class="field volField" id="volField" type="number" min="0" step="0.5" value="8"><span class="unit">µL</span></span>
+            </label>
+        </div>
+        <div class="colorPick">
+            <span class="fieldLabel">Color</span>
+            <div class="swatches" id="swatches"></div>
+            <label class="customColor" title="Pick any color">
+                <input type="color" id="colorField" value="#8E5CD9" aria-label="Custom compound color">
+                <span>Custom</span>
+            </label>
+            <input class="field hexField" id="hexField" maxlength="7" spellcheck="false" aria-label="Color as hex, like #2F6FDE">
+        </div>
+        <div class="row dialogActions">
+            <button class="btn" id="cancelBtn" type="button">Cancel</button>
+            <button class="btn primary" id="saveBtn" type="button">Add</button>
+        </div>
+    </section>
+</dialog>
+
 <div class="menu" id="cardMenu" role="menu" hidden>
     <button role="menuitem" data-act="edit">Edit</button>
     <button role="menuitem" data-act="delete" class="danger">Delete</button>
@@ -198,7 +231,7 @@
             <button type="button" class="btn" data-preset="1800">30 min</button>
             <button type="button" class="btn" data-preset="3600">1 h</button>
         </div>
-        <p class="hint">Each well gets its own timer: it starts when the compound before it goes into that well, and only that well waits. Adding the next compound to a well before its timer ends raises a "Too early" alarm.</p>
+        <p class="hint">Each well waits on its own: its timer starts when the previous compound goes into that well.</p>
         <div class="row">
             <button class="btn" value="cancel">Cancel</button>
             <button class="btn primary" value="add">Add timer</button>
