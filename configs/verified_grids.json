@@ -1,0 +1,6 @@
+{
+  "_why": "Train clips whose pipeline grid (clip_grids.json H) was checked by eye at full resolution and is on the wells, although an automatic review flag fired (the flag came from the fusion step disagreeing). Used as grid-verifier training labels in addition to unflagged clips. Train plates only; never val/test. 2026-10-06: Plate_1_clip_0005 removed - the ring-edge check shows its grid in the gaps between wells (my eye check was wrong).",
+  "Plate_1_clip_0006": "2026-10-06 session overlay f31: grid on wells",
+  "Plate_1_clip_0007": "2026-10-06 session overlay f31: grid on wells",
+  "Plate_1_clip_0008": "2026-10-06 6x zoom f38 + labels.json row H under the 12-channel tips"
+}

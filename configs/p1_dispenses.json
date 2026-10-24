@@ -1,0 +1,202 @@
+{
+ "_why": "Every dispense in pipette1.mp4 session 1 (85-386 s; columns 12 -> 9, rows H -> A). From the user's tip labels (runs of labelled frames; well = most common well of the second half of the run through the offline plate grid, every one matches the column-fill order) plus 3 short unlabelled stops checked by eye (H10, D10, E9). The plate is moved after ~386 s; the second session (450-478 s) is not covered.",
+ "video": "data/raw/pipette1.mp4",
+ "covers": [
+  85.0,
+  386.0
+ ],
+ "events": [
+  {
+   "well": "H12",
+   "t0": 90.87,
+   "t1": 92.57,
+   "source": "labels"
+  },
+  {
+   "well": "G12",
+   "t0": 95.23,
+   "t1": 96.33,
+   "source": "labels"
+  },
+  {
+   "well": "F12",
+   "t0": 113.8,
+   "t1": 114.57,
+   "source": "labels"
+  },
+  {
+   "well": "E12",
+   "t0": 121.07,
+   "t1": 122.1,
+   "source": "labels"
+  },
+  {
+   "well": "D12",
+   "t0": 129.57,
+   "t1": 130.97,
+   "source": "labels"
+  },
+  {
+   "well": "C12",
+   "t0": 137.5,
+   "t1": 138.63,
+   "source": "labels"
+  },
+  {
+   "well": "B12",
+   "t0": 145.97,
+   "t1": 146.97,
+   "source": "labels"
+  },
+  {
+   "well": "A12",
+   "t0": 154.03,
+   "t1": 155.0,
+   "source": "labels"
+  },
+  {
+   "well": "H11",
+   "t0": 162.63,
+   "t1": 163.6,
+   "source": "labels"
+  },
+  {
+   "well": "G11",
+   "t0": 170.07,
+   "t1": 170.93,
+   "source": "labels"
+  },
+  {
+   "well": "F11",
+   "t0": 178.4,
+   "t1": 179.27,
+   "source": "labels"
+  },
+  {
+   "well": "E11",
+   "t0": 185.73,
+   "t1": 186.6,
+   "source": "labels"
+  },
+  {
+   "well": "D11",
+   "t0": 201.77,
+   "t1": 203.03,
+   "source": "labels"
+  },
+  {
+   "well": "C11",
+   "t0": 207.13,
+   "t1": 208.17,
+   "source": "labels"
+  },
+  {
+   "well": "B11",
+   "t0": 220.63,
+   "t1": 221.8,
+   "source": "labels"
+  },
+  {
+   "well": "A11",
+   "t0": 229.07,
+   "t1": 230.5,
+   "source": "labels"
+  },
+  {
+   "well": "H10",
+   "t0": 238.8,
+   "t1": 239.5,
+   "source": "eye"
+  },
+  {
+   "well": "G10",
+   "t0": 248.47,
+   "t1": 249.83,
+   "source": "labels"
+  },
+  {
+   "well": "F10",
+   "t0": 256.6,
+   "t1": 258.37,
+   "source": "labels"
+  },
+  {
+   "well": "E10",
+   "t0": 275.53,
+   "t1": 276.93,
+   "source": "labels"
+  },
+  {
+   "well": "D10",
+   "t0": 279.0,
+   "t1": 280.0,
+   "source": "eye"
+  },
+  {
+   "well": "C10",
+   "t0": 289.63,
+   "t1": 292.7,
+   "source": "labels"
+  },
+  {
+   "well": "B10",
+   "t0": 305.27,
+   "t1": 306.23,
+   "source": "labels"
+  },
+  {
+   "well": "A10",
+   "t0": 314.1,
+   "t1": 315.3,
+   "source": "labels"
+  },
+  {
+   "well": "H9",
+   "t0": 324.13,
+   "t1": 324.7,
+   "source": "labels"
+  },
+  {
+   "well": "G9",
+   "t0": 333.97,
+   "t1": 335.67,
+   "source": "labels"
+  },
+  {
+   "well": "F9",
+   "t0": 342.17,
+   "t1": 343.17,
+   "source": "labels"
+  },
+  {
+   "well": "E9",
+   "t0": 349.5,
+   "t1": 350.7,
+   "source": "eye"
+  },
+  {
+   "well": "D9",
+   "t0": 358.1,
+   "t1": 358.77,
+   "source": "labels"
+  },
+  {
+   "well": "C9",
+   "t0": 364.17,
+   "t1": 364.93,
+   "source": "labels"
+  },
+  {
+   "well": "B9",
+   "t0": 372.03,
+   "t1": 372.83,
+   "source": "labels"
+  },
+  {
+   "well": "A9",
+   "t0": 381.47,
+   "t1": 382.43,
+   "source": "labels"
+  }
+ ]
+}

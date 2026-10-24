@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Well Plate UI</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body data-view="plan">
+<div class="app">
+    <!-- LEFT: compound library (1/5) -->
+    <aside class="lib" aria-label="Compound library">
+        <header class="brand">
+            <h1>Well Plate UI</h1>
+            <p>Plate Tracker</p>
+        </header>
+        <div class="libTools">
+            <input class="field" id="searchBox" type="search" placeholder="Search compounds" aria-label="Search compounds">
+        </div>
+        <p class="libHint runOnly">Tap the compound that is in the tip now.</p>
+        <ul class="list" id="compoundList"></ul>
+        <section class="editor" id="editor" aria-label="Add or edit compound">
+            <div class="editorHead" id="editorTitle">Add compound</div>
+            <div class="row">
+                <input class="field" id="nameField" placeholder="Compound name" aria-label="Compound name" maxlength="40">
+                <input class="field tagField" id="tagField" placeholder="Tag" aria-label="Short tag" maxlength="4">
+            </div>
+            <div class="row">
+                <input class="field volField" id="volField" type="number" min="0" step="0.5" value="8" aria-label="Volume in microliters">
+                <span class="unit">µL</span>
+            </div>
+            <div class="colorPick">
+                <span class="colorLabel">Color</span>
+                <div class="swatches" id="swatches"></div>
+                <label class="customColor" title="Pick any color">
+                    <input type="color" id="colorField" value="#8E5CD9" aria-label="Custom compound color">
+                    <span>Custom</span>
+                </label>
+                <input class="field hexField" id="hexField" maxlength="7" spellcheck="false" aria-label="Color as hex, like #2F6FDE">
+            </div>
+            <div class="row">
+                <button class="btn primary" id="saveBtn">Add</button>
+                <button class="btn" id="cancelBtn" hidden>Cancel</button>
+            </div>
+        </section>
+    </aside>
+
+    <!-- RIGHT: plate (4/5) -->
+    <main class="stage">
+        <div class="topBar">
+            <div class="tabs" role="tablist">
+                <button class="tab" role="tab" data-tab="plan" aria-selected="true">Plan</button>
+                <button class="tab" role="tab" data-tab="run" aria-selected="false">Run</button>
+                <button class="tab" role="tab" data-tab="records" aria-selected="false">Records</button>
+            </div>
+            <div class="linkInfo">
+                <span class="linkItem"><i class="linkDot" id="serverDot"></i><span id="serverText">Connecting…</span></span>
+                <span class="linkItem"><i class="linkDot" id="aiDot"></i><span id="aiText">Camera: not connected</span></span>
+                <a class="linkItem simLink" href="/camera" target="cameraSimulator" title="A fake camera in another tab: hover, select and dispense into wells yourself">Camera simulator &#8599;</a>
+            </div>
+        </div>
+
+        <div class="controls planOnly">
+            <div class="control">
+                <label>Tool</label>
+                <div class="segmented" id="toolSeg">
+                    <button data-tool="paint" aria-pressed="true">Paint</button>
+                    <button data-tool="erase" aria-pressed="false">Erase</button>
+                    <button data-tool="inspect" aria-pressed="false" title="Click a well to see what goes into it (right-click works with any tool)">Inspect</button>
+                </div>
+            </div>
+            <div class="control">
+                <button class="btn" id="timerBtn">&#9201;&#xFE0E; Add timer</button>
+                <button class="btn danger" id="clearBtn">Clear plate</button>
+            </div>
+            <span class="spacer"></span>
+            <span class="hint" id="planHint">Select wells (tap or drag), then Confirm. To see what is in a well: Inspect, or right-click it.</span>
+        </div>
+
+        <div class="stageBar planOnly" id="stageBar" hidden>
+            <span id="stageText"></span>
+            <span class="spacer"></span>
+            <button class="btn" id="stageCancel">Cancel</button>
+            <button class="btn primary" id="stageConfirm">Confirm</button>
+        </div>
+
+        <div class="runBar runOnly">
+            <div class="runStat runState">
+                <span class="statusPill" id="runPill">Not started</span>
+                <span class="stepNow" id="stepNow"></span>
+            </div>
+            <div class="runStat tipStat" id="inTip"></div>
+            <div class="runStat nextStat" id="nextWell"></div>
+            <span class="spacer"></span>
+            <div class="runStat progress">
+                <span class="runLabel">Progress</span>
+                <span id="progText"></span>
+                <div class="progTrack"><i id="progBar"></i></div>
+            </div>
+            <div class="runActions">
+                <button class="btn primary big" id="startBtn">Start run</button>
+                <button class="btn" id="nextWellBtn" title="Count the outlined well as dispensed (overrides the camera) and go to the next well">Next well &#9656;</button>
+                <button class="btn" id="resetBtn">Reset run</button>
+            </div>
+        </div>
+
+        <div class="tipBar runOnly" id="tipBar" aria-live="polite" hidden>
+            <span class="runLabel">Tip</span>
+            <span class="tipWell" id="tipWell"></span>
+            <span id="tipText"></span>
+        </div>
+
+        <div class="banner" id="banner" role="alert" hidden>
+            <span class="bannerMark">!</span>
+            <div class="bannerText"><strong id="bannerTitle"></strong><span id="bannerMsg"></span></div>
+            <button class="btn" id="ackBtn">Acknowledge</button>
+        </div>
+
+        <section class="plateView" id="viewPlate">
+            <div class="plateWrap" id="plateWrap">
+                <div class="plateShadow" id="plateShadow"><div class="plate" id="plate"></div></div>
+            </div>
+            <aside class="steps" aria-label="Protocol steps">
+                <h2>Protocol</h2>
+                <ol class="stepList" id="stepList"></ol>
+                <p class="hint" id="stepsEmpty">No steps yet. Select wells and press Confirm to add the first compound.</p>
+                <p class="hint stepsNote planOnly">Wells with several compounds show one band per compound, top to bottom in the order they are added. Hover a well for details.</p>
+            </aside>
+        </section>
+
+        <div class="runFoot runOnly">
+            <div class="legend" aria-label="Legend">
+                <span><i class="lg planned"></i>To add</span>
+                <span><i class="lg next"></i>Next well</span>
+                <span><i class="lg done">&#10003;</i>All added</span>
+                <span><i class="lg stripes"></i>Several compounds</span>
+                <span><i class="lg timerLg"></i>Timer running</span>
+                <span><i class="lg err">!</i>Check</span>
+            </div>
+            <span class="spacer"></span>
+            <details class="setup" id="setup">
+                <summary id="setupSummary">Camera &amp; test</summary>
+                <div class="setupBody">
+                    <label for="cornerSelect">Well A1 in the camera picture</label>
+                    <select id="cornerSelect">
+                        <option value="auto">Not set (camera guesses)</option>
+                        <option value="topLeft">Top left</option>
+                        <option value="topRight">Top right</option>
+                        <option value="bottomLeft">Bottom left</option>
+                        <option value="bottomRight">Bottom right</option>
+                    </select>
+                    <label class="checkLabel"><input type="checkbox" id="soundBox" checked> Alarm sound</label>
+                    <span class="setupNote">Test without the camera:</span>
+                    <a class="btn" href="/camera" target="cameraSimulator">Open camera simulator &#8599;</a>
+                    <div class="row">
+                        <button class="btn" id="testOkBtn">Correct drop</button>
+                        <button class="btn" id="testBadBtn">Wrong drop</button>
+                    </div>
+                </div>
+            </details>
+        </div>
+
+        <section class="records" id="viewRecords" hidden>
+            <div>
+                <h2>Detection log</h2>
+                <div class="tableWrap"><table>
+                    <thead><tr><th>Time</th><th>Well</th><th>Planned</th><th>Detected</th><th>Result</th><th>Source</th></tr></thead>
+                    <tbody id="logBody"></tbody>
+                </table></div>
+                <p class="hint" id="logEmpty">No drops yet. Press Start run in the Run tab.</p>
+            </div>
+            <div>
+                <h2>Plan the camera reads</h2>
+                <p class="hint" style="margin:0 0 8px">What the camera code fetches from GET /api/plan (it reads the A1 corner from here).</p>
+                <div class="row" style="margin-bottom:8px"><button class="btn" id="copyBtn" style="flex:none">Copy JSON</button></div>
+                <pre id="payload"></pre>
+            </div>
+        </section>
+    </main>
+</div>
+<div class="menu" id="cardMenu" role="menu" hidden>
+    <button role="menuitem" data-act="edit">Edit</button>
+    <button role="menuitem" data-act="delete" class="danger">Delete</button>
+</div>
+<div class="menu wellInfo" id="wellInfo" hidden></div>
+<dialog class="dialog" id="timerDialog">
+    <form method="dialog">
+        <h2>Add a timer</h2>
+        <p class="hint" id="timerAfter"></p>
+        <div class="timerInputs">
+            <label>Minutes <input class="field" id="timerMin" type="number" min="0" max="1440" value="5"></label>
+            <label>Seconds <input class="field" id="timerSec" type="number" min="0" max="59" value="0"></label>
+        </div>
+        <div class="presets">
+            <button type="button" class="btn" data-preset="30">30 s</button>
+            <button type="button" class="btn" data-preset="300">5 min</button>
+            <button type="button" class="btn" data-preset="900">15 min</button>
+            <button type="button" class="btn" data-preset="1800">30 min</button>
+            <button type="button" class="btn" data-preset="3600">1 h</button>
+        </div>
+        <p class="hint">Each well gets its own timer: it starts when the compound before it goes into that well, and only that well waits. Adding the next compound to a well before its timer ends raises a "Too early" alarm.</p>
+        <div class="row">
+            <button class="btn" value="cancel">Cancel</button>
+            <button class="btn primary" value="add">Add timer</button>
+        </div>
+    </form>
+</dialog>
+<div class="toast" id="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

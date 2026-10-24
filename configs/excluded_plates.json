@@ -1,0 +1,11 @@
+{
+  "excluded": [
+    10
+  ],
+  "_why": "User decision 2026-10-08: do not use plate 10 for training or evaluation from now on (in most of its clips the plate is moved to the frame edge / out of the Topview frame). The approved split in configs/splits.json is unchanged; load_splits() drops these plates from every split.",
+  "excluded_clips": [
+    "Plate_2_clip_0007",
+    "Plate_2_clip_0009"
+  ],
+  "_why_clips": "User decision 2026-10-08: not our use case - these clips start with the 8-channel pipette already over the plate (the demo always starts with the plate visible). Left out of training and evaluation; raw data untouched."
+}

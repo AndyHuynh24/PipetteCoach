@@ -1,0 +1,8 @@
+{
+  "_why": "Wells never used as well-net positives, checked by eye on runs/20261013-164746_well-labels/transfyr_sheet.jpg (2026-10-13): on plate 1 a multichannel pipette lies over the image-right edge (rows G-H) in every clip, so the clean-look reference itself contains its tips. Used by scripts/build_well_labels.py.",
+  "Plate_1_clip_0004": {"rows": "GH"},
+  "Plate_1_clip_0005": {"rows": "GH"},
+  "Plate_1_clip_0006": {"rows": "GH"},
+  "Plate_1_clip_0007": {"rows": "GH"},
+  "Plate_1_clip_0008": {"rows": "GH"}
+}

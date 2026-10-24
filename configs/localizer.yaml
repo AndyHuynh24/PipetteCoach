@@ -1,0 +1,281 @@
+# Plate localizer settings. Units: "pitch" = distance between neighbouring well centres (9 mm on an SBS plate).
+# Values were chosen on train plates (1, 2, 9, 10) and checked on val plate 4 only.
+
+wells:
+  # Expected well pitch in pixels. Dataset Topview (1080p) measures 14-15 px. The range is generous so
+  # slightly different framings still work; a closer live camera needs both values changed.
+  pitch_px_nominal: 14.5
+  pitch_px_range: [11, 20]
+  # Ring filter radii as a fraction of the nominal pitch. A well looks like a bright
+  # rim around a darker centre: inner disk ~0.24 pitch, rim out to ~0.45 pitch (measured on Topview frames).
+  ring_inner_frac: 0.24
+  ring_outer_frac: 0.45
+  # Minimum ring contrast (grey levels, bright rim minus dark centre). 20 kept nearly all real wells on
+  # plates 9/10 while dropping most bench texture; plate-like grids elsewhere are rejected later.
+  min_ring_score: 20
+  # Non-maximum suppression window, as a fraction of nominal pitch (~half a pitch: one peak per well).
+  nms_frac: 0.48
+  # Drop candidates in strongly coloured areas (blurred HSV saturation): coloured tip boxes and racks.
+  # The warm-lit grey bench and clear plate sit around 40-60.
+  max_saturation: 70
+  saturation_blur_px: 15
+  # Candidate finder. "ring": bright rim minus dark centre (fails on filled wells: 3/96 found with dye,
+  # 0/96 milky). "radial_edge": fraction of the colour-edge energy on a circle of the opening radius that
+  # points radially at the centre - polarity-free (works for any fill) and contrast-free.
+  method: ring           # radial_edge is being validated (see align); not the default until it is measured
+  radial_edge:
+    radii_frac: [0.40, 0.44, 0.48]   # opening radius measured on val: 0.44 pitch (outer edge of the wall)
+    ring_sigma_frac: 0.05            # thickness of the sampling ring
+    min_ratio: 0.55                  # radial share of ring edge energy (0.5 ~ random edges, 1 = perfect circle)
+    noise_floor_pct: 50              # edge energy below this percentile (of the ROI) counts as noise
+    use_saturation_filter: false     # coloured fills are wells too; tip boxes are rejected at plate level
+  # When a plate box is known, keep only candidates inside its WELL AREA: canonical well centres span
+  # [0, 11] x [0, 7]; this margin (pitch) around them excludes the plastic rim (1.25-1.6 pitch wide) and
+  # everything outside the plate (fingers, pipette, bench) but tolerates a slightly-off box.
+  box_well_margin: 0.7
+
+grid_fit:
+  # Global grid search (used to auto-label frames and as a detector-free fallback).
+  ransac_iters: 400
+  # A candidate is on the grid if it is within this fraction of a pitch of a lattice node.
+  inlier_tol: 0.22
+  # Neighbour vectors must be near-equal length and near-perpendicular to form a lattice basis.
+  basis_len_ratio: [0.85, 1.18]
+  basis_max_cos: 0.25
+  # Hypotheses whose best 12x8 window has the most inliers are verified in full (top-k).
+  verify_top_k: 15
+  # A predicted centre "sits on a ring" if the ring response there exceeds this (a bit below
+  # min_ring_score because predicted centres are not exactly on the response peak).
+  verify_ring_score: 15
+  # Fraction of the 96 predicted centres that must sit on a ring for a fit to count as confident.
+  # Real plates scored 0.92-1.00 on train plates; tip boxes and partial fits scored 0.38-0.83.
+  confident_frac: 0.9
+
+detector:
+  weights: models/plate_obb_v2/weights/best.pt  # v2: also trained on occluded frames (docs/DECISIONS.md)
+  imgsz: 1024          # plate is ~200 px wide at 1920; 1024 keeps it ~110 px, enough for an oriented box
+  min_conf: 0.6        # val plate 4 detections were 0.97-0.99; lifted/blurred plates scored < 0.6
+  # Reject boxes touching the image border: a cut-off plate gives a shrunken box and shifted numbering
+  # (0/120 correct on the cut-plate test). Margin in pixels.
+  border_margin_px: 4
+  # Shape sanity check on every detection (after snapping). Wells sit on a square 9 mm lattice, so in a
+  # top-down view column and row pitch are near-equal: good val detections have ratio 1.02-1.04. Boxes
+  # covering only the visible part of an occluded plate gave 1.14-2.03, or shrank evenly to ~9 px pitch
+  # (caught by wells.pitch_px_range). Rejected detections become "not found" instead of a wrong grid.
+  max_axis_ratio: 1.08
+  # Only accept a detection once its grid has snapped onto real wells (>= snap.min_matches). A raw box on
+  # a partly covered plate was squashed by ~1 column (plate 2 clip 10); better to wait for a clearer frame.
+  require_snap: true
+  # Final check on every detection: at most this fraction of the 96 predicted wells may land on visibly
+  # empty bench (see `empty`). Wrong placements from bad boxes put 25-40% of wells on the bench.
+  max_empty_frac: 0.1
+
+snap:
+  # Snap projected well centres to ring candidates within this fraction of a pitch.
+  gate: 0.35
+  rounds: 4
+  min_matches: 8        # below this a similarity fit is not trustworthy
+  full_homography_min: 60  # only fit all 8 homography DOF when most of the plate is visible
+  max_shift: 0.5       # refinement may move the detector grid at most this many pitches (detector err <= 0.4)
+
+track:
+  # Fixed camera: keep the calibrated perspective, estimate only in-plane plate motion each frame.
+  gate: 0.35
+  rounds: 4
+  min_matches: 6       # 6 visible wells are enough for a 4-DOF similarity; cut-plate test: 114/120 correct
+  max_shift: 0.6       # larger jumps between frames -> declare lost and re-detect
+  roi_margin_pitch: 2.0  # only look for wells within this margin of the predicted plate (speed)
+  # A plate on the bench cannot spin or change size much between frames (30 fps). Larger apparent changes
+  # come from wrong matches (e.g. the row of white multichannel tips) -> reject, hold the last position.
+  max_rot_deg: 2.0
+  max_scale_change: 0.03
+
+partial_snap:
+  # Used when the normal snap fails because the detector box covers only the visible part of the plate
+  # (e.g. multichannel tips over one side). Measures the exact lattice from visible wells, tries every
+  # placement of the full 12x8 plate over them, and keeps the one whose wells inside the box have rings
+  # and whose outline matches the box on at least one side per axis (the uncovered sides are accurate).
+  min_wells: 12          # fewer visible wells -> too little evidence for the lattice
+  # Search this far around the detector's grid for wells: a bad box can miss the visible side of the plate,
+  # and every visible well must be covered by the chosen placement (plate 2 clip 4 was placed 90 deg off).
+  roi_margin_pitch: 6.0
+  axis_tol_deg: 20       # neighbour vectors within this angle of the detector's axes define the lattice
+  inlier_tol: 0.25       # pitch; candidate must sit this close to a lattice node
+  edge_weight: 0.25      # score = frac of in-box wells on rings - edge_weight * edge error (pitch)
+  max_edge_err: 0.8      # pitch; best placement must match the box this well on its good sides
+  min_margin: 0.05       # best score must beat the runner-up by this much, else ambiguous -> refuse
+  empty_weight: 1.0      # score -= empty_weight * fraction of the 96 predicted wells on empty bench
+  # Which way the 12 columns run is ambiguous from a partly covered plate. If an earlier good fit exists
+  # (live: calibration / previous frames; dataset: earlier clip of the same plate), placements whose
+  # 12-column axis differs from it by more than this are discarded (plate barely rotates on the bench).
+  prior_axis_tol_deg: 30
+
+align:
+  # Whole-grid alignment on the radial-edge score map (see refine.align_grid). Search ranges in pitch.
+  detect: {shift: 0.6, rot_deg: 3.0, rot_step_deg: 1.0, scale: 0.04, scale_step: 0.01}   # from a detector box
+  track: {shift: 0.3, rot_deg: 1.0, rot_step_deg: 0.5, scale: 0.01, scale_step: 0.01}    # frame to frame
+  coarse_step: 0.1        # pitch
+  min_wells_in_view: 8    # placements with fewer predicted wells inside the image are not scored
+  margin_dist: 0.35       # pitch; the half-offset lattice (0.5 pitch away) must score clearly lower
+  min_score: 0.55         # mean radial score at the wells (real wells ~0.68, gaps between wells ~0.50)
+  min_margin: 0.03
+  # Grid shifted by exactly one row/column must score at least this much lower (mean over wells). One row
+  # of 8-12 wells moving from real wells (~0.68) to gaps/rim (~0.50) changes the mean by ~0.02.
+  min_lattice_margin: 0.012
+
+border:
+  # The plate's outer border is a continuous straight edge at a fixed distance from the outermost wells
+  # (SBS: 1.25 pitch on long sides, 1.6 on short sides). Used to catch grids that are a whole row/column off
+  # when an outer row is hidden (plate 1 clips 1 & 4). Offsets in pitch along each side's outward normal.
+  search: 1.4            # look for the border this far either side of where the grid predicts it
+  step: 0.05
+  samples_along: 40
+  min_contrast: 1.8      # peak / median of the side's edge profile: below this the side is covered / unclear
+  snap_tol: 0.3          # a visible side's offset must be within this of an integer to imply a shift
+
+fusion:
+  # Stable well positions by fusing high-confidence circles over frames (plate static within a clip:
+  # median motion 0.2 px on val). Per-frame refits jittered 5-23 px on plate 2 (multichannel occlusion).
+  hi_ratio: 0.70         # radial-edge score that counts on its own (filled wells: ring filter cannot confirm)
+  lo_ratio: 0.60         # lower radial score accepted only if the ring filter confirms the well
+  ring_confirm: 15       # ring-filter response (grey levels) needed to confirm a circle as a well
+  assign_gate: 0.3       # pitch; circle must be this close to its predicted well to be assigned
+  min_obs: 3             # frames a well must be seen in before its median position is trusted
+  min_wells: 12          # wells with trusted positions needed to fit the fused homography
+  ransac_frac: 0.08      # pitch
+  motion_gate: 0.25      # pitch; median shift of fresh observations vs fused positions that means "plate moved"
+  # Ring evidence decides grid placement unless a clip averages fewer ring peaks than this per frame (mostly
+  # filled plate). Edge circles alone can lock onto the half-offset lattice of bright gaps between empty wells.
+  min_ring_obs_per_frame: 10
+
+verifier:
+  # Learned grid verifier (scripts/train_grid_verifier.py): picks among the grid and its half-well / one-row /
+  # one-column shifts. Val plate 4: 100% top-1 vs 34% for the radial-edge evidence. On held-out multichannel
+  # train clips it fixed plate 1 c1/c4 (24/24 frames, margin ~0.7) but was wrong on plate 2 c10 at a low margin
+  # (0.08), so a correction is applied only when confident.
+  weights: models/grid_verifier/best.pt
+  every: 3               # score every Nth frame of a clip
+  min_vote: 0.8          # share of scored frames that must pick the same correction
+  min_margin: 0.3        # median score margin over the runner-up
+
+edge_anchor:
+  # Keep the grid still unless the plate border moves (fixed camera, plate resting on the bench).
+  band: 0.7              # pitch: border band compared each frame (outline +- band)
+  roi_margin: 1.5        # pitch: crop around the plate for the comparison
+  search_pitch: 0.45     # pitch: border shifts searched each frame (beyond redetect_pitch -> full detection)
+  # The grid is kept exactly only while neither the border nor the visible wells moved more than still_px.
+  # 1 px = 0.07 pitch (clean val clips show 0.2-0.4 px of noise); anything larger is followed in the SAME frame
+  # once a second cue agrees, because ~0.25 pitch (3-4 px) of error already risks the wrong well.
+  still_px: 1.0
+  agree_pitch: 0.15      # border-measured move and well-measured move must agree within this
+  # Border hidden: only the wells (ring tracking) can tell; that cue is noisier (0.5-1.5 px frame to frame on
+  # static val plates), so a wells-only move must exceed this and be supported by enough wells. 2 px = 0.14
+  # pitch, still well under the ~0.25 pitch (3-4 px) where the wrong well becomes possible.
+  wells_still_px: 2.0
+  wells_min_matches: 20
+  disagree_redetect: 5   # border moved but many visible wells did not, this many frames in a row -> re-detect
+  # Border matched this clearly (NCC) while too few wells are visible to check (multichannel pipette over the
+  # plate): follow the border alone. Plate 2 c3 had NCC 0.96 on a real 1 px move with the wells covered.
+  border_alone_response: 0.8
+  # A re-detection farther than this (pitch) from the grid we already had is not trusted: the half-well /
+  # one-row ambiguity is far likelier than a real plate jump (plate 2 c3: re-detection landed 10.8 px off).
+  redetect_max_jump: 0.5
+  min_response: 0.5      # normalised cross-correlation below this = border not clearly visible -> ask the wells
+  redetect_pitch: 0.4    # a confident border move larger than this re-runs full detection (plate really moved)
+
+openings:
+  # Final refinement: fit each well's OPENING circle from its outer edge (bright wall -> plate) and refit
+  # the plate grid on those centres. Uses the circle edge, not the dark well bottom (which shifts with
+  # camera angle and can vanish when wells are filled).
+  patch_half: 0.62       # patch half-size around each well, fraction of pitch
+  patch_px: 33           # patch resolution (sub-pixel sampling)
+  n_rays: 64             # rays per well for the edge profile
+  min_contrast: 3        # grey levels between wall peak and plate outside it; flatter rays are skipped
+  min_ray_frac: 0.5      # a well needs edges on at least this fraction of rays
+  max_offset: 0.3        # pitch; per-well opening centre farther than this from the grid -> ignored
+  min_wells: 40          # need at least this many fitted wells to refit the grid
+  ransac_frac: 0.08      # pitch; RANSAC reprojection threshold for the refit
+  max_change: 0.25       # pitch; refit may move the grid at most this much (else keep the input grid)
+  # ~44 ms per refit at 1080p: run it on every detection and on every Nth tracked frame (tracking alone
+  # follows the dark well bottoms, which sit ~0.2-0.4 px off the openings on val).
+  every_n_tracked: 10
+
+ring_edge:
+  # Placement by ring edges when the plate placement is not confident (verifier margin below
+  # verifier.min_margin, or a fallback method). A well supports a candidate grid when its ring-edge circle fit
+  # is centred on the prediction within centred_frac pitch. Candidate must beat the runner-up by min_margin
+  # wells (one row/column of the plate = 8-12 wells; half-well shifts lose most visible wells).
+  centred_frac: 0.15
+  min_margin: 4
+  # Bottom-up ring detection (openings.detect_rings): a clean ring-edge circle must have a radius in this range
+  # (opening edge measured at 0.44 pitch on val), a median fit residual below max_residual_px, and lie within
+  # probe_max_offset pitch of the probe. Gap blobs between wells fail these (concave diamond, not a circle).
+  radius_frac: [0.36, 0.52]
+  max_residual_px: 0.8
+  probe_max_offset: 0.3
+  min_rings: 12          # rings needed to reconstruct the plate (homography: 8 dof, RANSAC)
+  # Ring vs gap, measured on 480 wells / 415 gaps of clean train clips (plates 9, 10): share of rays with an edge
+  # wells p10 0.84 / gaps p90 0.84; radius spread (pitch) wells p90 0.051 / gaps p10 0.047, median 0.061.
+  min_ray_frac: 0.85
+  max_radius_iqr: 0.05
+
+plate_edges:
+  # Real plate outline (localizer/plate_edges.py). Each side = straight line with the largest |median signed
+  # gradient| along it, searched within search_pitch of the rough side (detector box was seen up to ~1 pitch off
+  # and a few degrees rotated). Ends trimmed (corners are rounded, hands often hold them). min_score: gradient
+  # (grey levels/px after sigma_px blur) below which a side is treated as hidden and the rough side is kept.
+  search_pitch: 1.5
+  step_px: 0.25
+  n_samples: 60
+  end_trim: 0.12
+  sigma_px: 1.0
+  min_score: 4.0
+  rel_score: 0.5     # an edge this strong relative to the side's best counts; the outermost such edge wins
+  # Rectangle constraint: opposite plate sides are parallel in a top view (perspective tilt here < 1 deg);
+  # a side more than parallel_tol_deg off its opposite is re-searched within parallel_fit_deg of parallel.
+  parallel_tol_deg: 2.0
+  parallel_fit_deg: 0.7
+  every_n: 3         # clip-level box: measure every n-th frame, median line per side over clearly-measured frames
+  # Sides hidden for a whole clip (pipette parked over them) are rebuilt from this plate's measured size (fixed
+  # camera, same plate: px size from its clips where all sides are clear). A side is "rarely measured" below
+  # min_support (share of frames). size_tol_px: opposite-side distance may differ this much from the plate size
+  # (measured clip-to-clip spread of clean plates is ~1 px).
+  min_support: 0.5
+  min_clean_support: 0.8   # a window counts toward the plate size only if every side is measured this often
+  move_px: 3.0       # >= 2 measured sides this far from the window's box, 3 sampled frames in a row = plate moved
+  move_confirm: 3
+  bench_bin: 8       # Lab bin size for the bench colour mode
+  # Colour veto: median Lab distance to the bench colour colour_delta_pitch OUTSIDE a candidate edge. Measured on
+  # train plates 9/4 + plate 1: real edges median 27 (p90 ~65); pipette boundaries 80-90 -> veto above 75.
+  # (Inside-vs-outside colour was tried: clear plates look like the bench, so it rejected real edges - see DECISIONS.)
+  use_colour: false   # off: clear plates look like the bench; vetoed real edges on plates 9/4/10 (2026-10-07)
+  colour_delta_pitch: 0.3
+  colour_veto_dist: 75.0
+  size_tol_px: 3.0
+  well_gate_pitch: 0.3  # a detected ring belongs to a grid node within this (perspective/small-move margin)
+  plate_size_pitch: [13.91, 9.546]  # (long, short) measured on all clean train/val windows 2026-10-07 (run wells-box-net)
+  size_tol_pitch: 0.35  # wells_box: a measured width this far (pitch units) from the plate size = one side is wrong
+  bench_band_pitch: [0.8, 2.0]    # band around the box (pitch) whose median colour is "bench"
+
+empty:
+  # "Empty" = visibly bare bench / plate rim / paper: no texture, no colour, not dark. A predicted well on
+  # empty pixels means the grid is misplaced (wells are textured rings; unseen wells are hidden under
+  # pipette (saturated/dark), hand (saturated) or hair (dark)). Measured on plate 1/2/4 frames: bench std
+  # < 2, sat 40-55; hand sat ~90+; pipette/hair value < 60; wells std ~20.
+  window_frac: 0.6       # local std / saturation window, fraction of nominal pitch (~9 px)
+  max_std: 4.0
+  max_saturation: 75
+  min_value: 60
+
+hold:
+  # Fixed camera, plate on the bench: when a hand/pipette hides too many wells to track, keep the last
+  # good plate position ("held") instead of dropping it. 300 frames = 10 s at 30 fps; after that the
+  # position is too stale to trust (plate may have been moved under the hand).
+  max_frames: 300
+
+orientation:
+  # Which of the two 180-degree-symmetric labellings is A1. "image_top_left": A1 is the corner well
+  # closer to the image's top-left. Verified on plate 9 only (H1 dispense is bottom-left); confirm per setup.
+  a1_rule: image_top_left
+  # Set true if the camera image is mirrored (some webcam apps flip preview horizontally).
+  camera_mirrored: false

@@ -1,0 +1,25 @@
+# Data: nothing under any data/ folder is pushed (raw clips, labels, own recordings, the UI database)
+data/
+*.db
+*.db-wal
+*.db-shm
+runs/
+.env
+.env.*
+__pycache__/
+*.pyc
+.venv/
+models/
+.DS_Store
+*.pt
+
+# Notes and logs in markdown stay local (except READMEs)
+*.md
+!README.md
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+
+# Local clone of the GitHub repo (not part of this tree)
+PipetteCoach/

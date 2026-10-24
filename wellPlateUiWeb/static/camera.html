@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camera Simulator</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+    body { overflow: auto; }
+    .sim { max-width: 1280px; margin: 0 auto; padding: 16px; display: grid; gap: 14px; }
+    .simHead { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+    .simHead h1 { margin: 0; font-size: 22px; }
+    .simHead p { margin: 0; color: var(--ink2); }
+    .simHead a { margin-left: auto; color: var(--accent); font-weight: 600; }
+    .simStatus { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+    .simStatus .runLabel { margin-right: 6px; }
+    .simBody { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; align-items: start; }
+    .simPlate { background: var(--slab); border-radius: 18px; padding: 14px; display: grid; grid-template-columns: 22px repeat(12, 1fr); gap: 6px; user-select: none; }
+    .simPlate .ax { display: grid; place-items: center; font-size: 12px; font-weight: 600; color: var(--ink2); }
+    .simWell { aspect-ratio: 1; border-radius: 50%; background: var(--wellEmpty); border: 2px solid var(--wellEmptyLine); position: relative; cursor: crosshair; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--ink2); }
+    .simWell.planned { border-style: dashed; }
+    .simWell.liquid { background: radial-gradient(circle at 40% 35%, #cfe8ff, #6fb1f0); color: #0b2c4d; }
+    .simWell:hover, .simWell.hover { outline: 3px solid rgba(14, 111, 142, 0.45); outline-offset: 1px; }
+    .simWell.sel { outline: 4px solid var(--ink); outline-offset: 2px; }
+    .simSide { display: grid; gap: 12px; }
+    .simCard { display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+    .bigWell { font-size: 40px; font-weight: 800; line-height: 1.1; color: var(--accent); font-variant-numeric: tabular-nums; }
+    .bigWell.off { color: var(--ink2); font-size: 18px; font-weight: 600; }
+    #dispenseBtn { width: 100%; font-size: 18px; padding: 14px; }
+    .verdict { font-weight: 700; margin-top: 4px; min-height: 20px; color: var(--ink2); }
+    .verdict[data-state="ok"] { color: var(--ok); }
+    .verdict[data-state="bad"] { color: var(--alarm); }
+    .simLog { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 320px; overflow: auto; }
+    .simLog li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+    .simLog li .hint { flex-basis: 100%; font-size: 12px; }
+    .simCard .runLabel { display: block; margin-bottom: 4px; }
+    .simLog .t { color: var(--ink2); font-variant-numeric: tabular-nums; }
+    .chip.info { background: rgba(90, 105, 120, 0.14); color: var(--ink2); }
+    .smallRow { display: flex; gap: 8px; flex-wrap: wrap; }
+    @media (max-width: 860px) { .simBody { grid-template-columns: 1fr; } .bigWell { font-size: 30px; } }
+</style>
+</head>
+<body>
+<div class="sim">
+    <header class="simHead">
+        <h1>Camera Simulator</h1>
+        <p>Plays the camera. Mouse over a well = the tip is over it: the Plate Tracker rings it green (right well) or red (wrong), and warns if you stay over a wrong well. Click = hold the tip there. Dispense = liquid goes in.</p>
+        <a href="/#run" target="plateTracker">Open Plate Tracker &#8599;</a>
+    </header>
+
+    <div class="simStatus">
+        <span><span class="runLabel">Run</span><b id="runState">…</b></span>
+        <span><span class="runLabel">In tip (set on the Plate Tracker)</span><span id="inTip">…</span></span>
+        <span><span class="runLabel">Plate Tracker</span><span id="link">connecting…</span></span>
+        <label class="checkLabel" style="margin-left:auto"><input type="checkbox" id="showPlan" checked> Show plan</label>
+    </div>
+
+    <div class="simBody">
+        <div class="simPlate" id="plate" aria-label="Simulated 96-well plate"></div>
+        <aside class="simSide">
+            <div class="simCard">
+                <span class="runLabel">Tip over</span>
+                <div class="bigWell off" id="hoverWell">off the plate</div>
+                <div class="verdict" id="verdict"></div>
+            </div>
+            <div class="simCard">
+                <span class="runLabel">Selected well</span>
+                <div class="bigWell off" id="selWell">click a well</div>
+                <div style="height:10px"></div>
+                <button class="btn primary" id="dispenseBtn" disabled>Dispense</button>
+                <div style="height:8px"></div>
+                <div class="smallRow">
+                    <button class="btn" id="liftBtn">Lift tip</button>
+                    <button class="btn" id="emptyBtn" title="Empty the simulated plate (the Plate Tracker run is not changed)">Empty plate</button>
+                </div>
+                <p class="hint" style="margin:8px 0 0">Keys: D or Enter = dispense, Esc = lift tip.</p>
+            </div>
+            <div class="simCard">
+                <span class="runLabel">What the Plate Tracker said</span>
+                <ul class="simLog" id="log"><li class="hint">No dispenses yet.</li></ul>
+            </div>
+        </aside>
+    </div>
+</div>
+<script src="/static/camera.js"></script>
+</body>
+</html>

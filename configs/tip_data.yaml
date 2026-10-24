@@ -1,0 +1,26 @@
+# Tip-end keypoint data (CVAT exports in data/own/tips_cvat/, videos in data/raw/). Used by build_tip_dataset.py.
+# Split by TIME inside each video (labelled frames come in runs of near-identical frames: a frame-level split leaks).
+#   t < val_from -> train, val_from <= t < test_from -> val, t >= test_from -> test (touched once, at the end).
+# crop: plate  = the plate area from the live plate tracker (what the model sees live; top-view video)
+#       random = random zoomed crops around the tip (angled / close-up videos where the plate grid does not work)
+# rows_toward: plate orientation for the live tracker (as live_demo --rows-toward), crop: plate videos only.
+# skip: time ranges (s) never used as "no tip" - e.g. a tip clearly in a well that was left unlabelled on purpose.
+videos:
+  pipette1: {xml: data/own/tips_cvat/annotations1.xml, crop: plate, val_from: 300, test_from: 340, n_neg: 240}
+  pipette2: {xml: data/own/tips_cvat/annotations2.xml, crop: random, val_from: 100000, test_from: 100000, n_neg: 30}
+  pipette3: {xml: data/own/tips_cvat/annotations3.xml, crop: random, val_from: 40, test_from: 55, n_neg: 60,
+             skip: [[10.5, 15.0]]}
+  # pipette4: plate turned 180 deg (A1 bottom-right), yellow liquid, 24 fps
+  pipette4: {xml: data/own/tips_cvat/annotations4.xml, crop: plate, val_from: 100, test_from: 125, n_neg: 80,
+             rows_toward: up}
+  # pipette5: own bench (blue mat), 30 fps .mov. Tips labelled 2-193 s only; tips are still visible after that, so
+  # 193 s - end is never "no tip". The plate detector does not find this plate yet -> crop from the hand-labelled
+  # plate boxes (plate does not move); frames 3093/4933/4193: SAM mask grew past the plate (checked by eye).
+  pipette5: {xml: data/own/tips_cvat/annotations5.xml, video: data/raw/pipette5.mov, crop: plate, val_from: 140,
+             test_from: 165, n_neg: 120, skip: [[193.0, 100000]], label_step: 2, outline: cvat_plate,
+             plate_drop: [3093, 4193, 4933]}
+neg_gap_s: 1.0          # "no tip" candidates: at least this far from any labelled frame (then checked by eye)
+plate_margin: [0.15, 0.35]  # plate crop: outline + this share of its size on each side (random per frame)
+random_crop: [0.45, 1.0]    # random crop: square side as a share of the frame's short side
+tip_box_frac: 0.04      # tip box side as a share of the crop's long side (~0.8 well spacing on a plate crop)
+seed: 0

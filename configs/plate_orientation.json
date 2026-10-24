@@ -1,0 +1,8 @@
+{
+  "_why": "Image direction in which rows go A -> H, per dataset plate. With a downward camera the plate is never mirrored, so this fixes the whole labelling (which corner is A1). Determined 2026-10-06 by checking where the pipette tips are in labelled dispense clips (train/val plates only). Test plates (3, 5) must be set without using their labels (e.g. from the printed letters in the FPV view).",
+  "1": "right",
+  "2": "down",
+  "4": "down",
+  "9": "down",
+  "10": "down"
+}

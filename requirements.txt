@@ -1,0 +1,13 @@
+# Core CV
+numpy==2.5.3
+opencv-python==5.0.0.93
+PyYAML==6.0.3
+scipy==1.18.1
+# Plate detector (YOLO oriented boxes). ultralytics is AGPL-3.0: fine for the hackathon; if the code is
+# published it must stay open source. The classical grid fit in pipette_coach/localizer works without it.
+torch==2.14.1
+torchvision==0.29.1
+ultralytics==8.4.174
+# Dev
+pytest==8.4.2
+ruff==0.13.3

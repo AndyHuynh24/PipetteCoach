@@ -1,0 +1,20 @@
+# Pipette tip -> well (pipette_coach/tracking/). Plate-view units: 14 px per well spacing.
+tip_geom:
+  # Lab colour distance to the window's median (clean-plate) view above which a pixel is foreground (hand,
+  # pipette). Plate/bench noise between frames is ~5-10; a clear tip on a clear plate is faint, so keep it low.
+  fg_thr: 18.0
+  min_depth_pitch: 0.5   # an entering object must reach this far into the well area to count as a pipette
+  cell_radius_pitch: 0.35
+  # Faint clear tip past the white shaft end (trace_tip): along the shaft axis, a band +-trace_band_px wide;
+  # tip continues while its difference from the clean plate exceeds median + trace_k_mad * MAD of the view;
+  # gaps up to trace_gap_px bridged (well rings under the tip); at most trace_max_pitch beyond the shaft end.
+  trace_band_px: 1.5
+  trace_k_mad: 4.0
+  trace_gap_px: 3.0
+  trace_max_pitch: 3.0  # well "covered" fraction is measured inside this radius (well opening ~0.44)
+labels_b:
+  # Tip-keypoint labels for model B from the geometric finder, kept only when they agree with labels.json:
+  # the geometric tip lies within near_pitch of the labelled well and that well is covered (foreground share).
+  near_pitch: 1.0
+  min_cover: 0.3
+  max_empty_fg: 0.01     # a frame with less foreground in the well area than this (and no tip) is a negative

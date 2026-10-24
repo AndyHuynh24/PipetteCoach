@@ -1,0 +1,4 @@
+{
+  "_why": "Train clips whose session-mode plate grid could not be verified by eye at full resolution; never used as detector training labels.",
+  "Plate_2_clip_0008": "left columns hidden under the hand in every frame; grid plausible but not verifiable"
+}
