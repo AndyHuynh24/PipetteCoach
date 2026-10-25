@@ -34,6 +34,7 @@ from pipette_coach.localizer.well_labels import (  # noqa: E402
     rim_evidence,
 )
 from pipette_coach.runs import new_run_dir, write_metrics  # noqa: E402
+from pipette_coach.tips import video_path  # noqa: E402
 
 MIN_REFS = 5
 REF_PER_CLIP, MIN_REF_CLIPS = 6, 3  # dataset clips
@@ -118,7 +119,7 @@ def main() -> None:
     summary = {}
     for v in a.videos:
         lab = json.loads((REPO_ROOT / "data" / "annotations" / f"well_corners_{v}.json").read_text())["labels"]
-        cap = cv2.VideoCapture(str(REPO_ROOT / "data" / "raw" / f"{v}.mp4"))
+        cap = cv2.VideoCapture(str(video_path(v)))
         fps = cap.get(cv2.CAP_PROP_FPS)
         items = [(int(k), np.array(e["H"]), float(e["t"])) for k, e in sorted(lab.items(), key=lambda kv: int(kv[0]))
                  if e["H"] is not None]  # fmt: skip
@@ -128,9 +129,10 @@ def main() -> None:
             frames[idx] = cap.read()[1]
             flats[idx] = flat_lab(frames[idx], H)
         sp = splits.get(v, {})
+        val_from, test_from = sp.get("well_split", [sp.get("val_from", 1e9), sp.get("test_from", 1e9)])
         out, tiles = [], []
         for k, (idx, H, t) in enumerate(items):
-            split = "train" if t < sp.get("val_from", 1e9) else ("val" if t < sp.get("test_from", 1e9) else "test")
+            split = "train" if t < val_from else ("val" if t < test_from else "test")
             refs = reference_frames(items, k)
             ev = rim_evidence(frames[idx], H, cfg)
             ch = change(flats[idx], [flats[items[j][0]] for j in refs]) if len(refs) >= MIN_REFS else None

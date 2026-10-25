@@ -23,6 +23,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--epochs", type=int, default=60)
     ap.add_argument("--imgsz", type=int, default=1024)
+    ap.add_argument("--batch", type=int, default=8, help="4 on an 8 GB Mac (8 swaps at imgsz 1024)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="mps")
     ap.add_argument("--init", default="yolo11n.pt", help="or a trained plate_det .pt to fine-tune")
@@ -34,7 +35,7 @@ def main() -> None:
     if out.exists():
         shutil.rmtree(out)
     YOLO(a.init).train(
-        data=str(PROCESSED_DIR / "plate_det" / "data.yaml"), imgsz=a.imgsz, epochs=a.epochs, batch=8,
+        data=str(PROCESSED_DIR / "plate_det" / "data.yaml"), imgsz=a.imgsz, epochs=a.epochs, batch=a.batch,
         device=a.device, seed=a.seed, deterministic=True, workers=4,
         degrees=15,  # boxes are axis-aligned: large rotations come from the upright copies instead
         scale=0.9,  # camera distance 0.1-1.9x (plus multi-scale search at run time)
@@ -44,7 +45,7 @@ def main() -> None:
     rows = list(csv.DictReader(open(out / "results.csv")))
     last = {k.strip(): v for k, v in rows[-1].items()}
     run = new_run_dir("plate-det-train")
-    m = {"epochs": a.epochs, "imgsz": a.imgsz, "seed": a.seed, "init": a.init, "name": a.name,
+    m = {"epochs": a.epochs, "imgsz": a.imgsz, "batch": a.batch, "seed": a.seed, "init": a.init, "name": a.name,
          "val_mAP50": float(last["metrics/mAP50(B)"]), "val_mAP50_95": float(last["metrics/mAP50-95(B)"]),
          "weights": str(out / "weights" / "best.pt")}  # fmt: skip
     write_metrics(run, m)

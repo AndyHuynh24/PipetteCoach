@@ -118,6 +118,7 @@ def main() -> None:
     )
     ap.add_argument("--train-until", type=float, default=300.0, help="hand-labelled frames after this (s) = TEST")
     ap.add_argument("--cvat-videos", default="pipette5", help="own videos with CVAT plate labels (tip_data.yaml)")
+    ap.add_argument("--cvat-only", action="store_true", help="only the --cvat-videos (skip ndjson, dataset, synth)")
     a = ap.parse_args()
     for d in (OUT, TEST):
         if d.exists():
@@ -125,6 +126,10 @@ def main() -> None:
     rng = np.random.default_rng(0)
     stats = {"hand_train": 0, "hand_test": 0, "dataset": 0, "rotated": 0, "synth": 0, "val": 0, "stray_dropped": 0}
     add_cvat_videos([v for v in a.cvat_videos.split(",") if v], stats)
+    if a.cvat_only:  # fine-tune on the own videos alone (other sources not on this machine)
+        (OUT / "data.yaml").write_text(f"path: {OUT}\ntrain: images/train\nval: images/val\nnames:\n  0: plate\n")
+        print(stats)
+        return
     # hand-labelled frames
     nd = Path(a.ndjson)
     for x in [json.loads(line) for line in open(nd)][1:]:
