@@ -1,5 +1,7 @@
 <p align="center"><img src="docs/assets/thumbnail.png" alt="Pipette Coach" width="820"></p>
 
+# DEMO VIDEO: https://www.youtube.com/watch?v=wlO89ggzbGg
+
 # Pipette Coach
 
 **Real-time webcam AI that tracks the pipette tip and stops wrong-well errors before they ruin experiments.**
