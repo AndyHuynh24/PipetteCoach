@@ -56,9 +56,12 @@ class WellChange:
     as soon as the well has been seen clearly for early_clean frames after the tip left (usually a fraction of a
     second) and the answer is clear; it waits up to post[1] s while the well is covered or the answer is borderline."""
 
+    # tex_ratio 0.9 / color_de 3 (early 0.8 / 6; was 0.8 / 5, early 0.7 / 8): pipette8+9 refit
+    # (scripts/tune_well_change_live.py) finds 107/145 dispenses vs 95/145, false liquid at hovers 19/33 vs 12/33;
+    # a miss is worse than a false alarm (only the tip's well is checked). See docs/DECISIONS.md 2026-10-24.
     def __init__(self, history_s: float = 30.0, cover_de: float = 25.0, pre=(5.0, 0.3), post=(0.0, 4.0),
-                 min_clean: int = 6, early_clean: int = 3, early_tex: float = 0.7, early_de: float = 8.0,
-                 same_after_s: float = 1.5, same_clean: int = 15, tex_ratio: float = 0.8, color_de: float = 5.0,
+                 min_clean: int = 6, early_clean: int = 3, early_tex: float = 0.8, early_de: float = 6.0,
+                 same_after_s: float = 1.5, same_clean: int = 15, tex_ratio: float = 0.9, color_de: float = 3.0,
                  same_tex=(0.87, 1.08), ref_rate: float = 0.02, reset_s: float = 20.0, s: int = S):  # fmt: skip
         self.history_s, self.cover_de, self.pre, self.post = history_s, cover_de, pre, post
         self.min_clean, self.early_clean, self.tex_ratio = min_clean, early_clean, tex_ratio

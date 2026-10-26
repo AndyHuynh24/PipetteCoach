@@ -118,6 +118,41 @@ class LogicTests(unittest.TestCase):
         self.assertTrue(pl.isComplete(steps, done))
         self.assertEqual(pl.classifyDrops(["A1"], 2, steps, done, {})[0][0]["kind"], "duplicate")
 
+    def testEachWellFollowsItsOwnSequence(self):
+        # well 1: A then B; well 2: B then A (free run: each well keeps its own order)
+        steps = [add(1, "A1"), add(2, "A1", "A2"), add(1, "A2")]
+        res, done = pl.classifyDrops(["A1", "A2"], 2, steps, {}, {})
+        self.assertEqual([r["kind"] for r in res], ["order", "ok"])  # B: only well 2 takes it first
+        res, done = pl.classifyDrops(["A1", "A2"], 1, steps, done, {})
+        self.assertEqual([r["kind"] for r in res], ["ok", "ok"])  # then A goes into both
+
+    def testAnyOrderWellTakesItsSubstancesInAnyOrder(self):
+        steps = [add(1, "A1", "B1"), add(2, "A1", "B1")]
+        res, done = pl.classifyDrops(["A1", "B1"], 2, steps, {}, {}, anyOrder={"B1"})
+        self.assertEqual([r["kind"] for r in res], ["order", "ok"])
+        res, done = pl.classifyDrops(["B1"], 1, steps, done, {}, anyOrder={"B1"})
+        self.assertEqual(res[0]["kind"], "ok")
+        self.assertEqual(pl.classifyDrops(["B1"], 2, steps, done, {}, anyOrder={"B1"})[0][0]["kind"], "duplicate")
+
+    def testAnyOrderWellWaitsOnlyForARunningTimer(self):
+        steps = [add(1, "A1"), wait(60), add(2, "A1")]
+        free = {"A1"}
+        timers = pl.wellTimers(steps, {}, 100.0)  # A not in yet: the timer has not started
+        self.assertEqual(pl.classifyDrops(["A1"], 2, steps, {}, timers, anyOrder=free)[0][0]["kind"], "ok")
+        done = {"0": {"A1": 100.0}}  # A went in at 100 s: the minute runs until 160 s
+        self.assertEqual(pl.classifyDrops(["A1"], 2, steps, done, pl.wellTimers(steps, done, 120.0),
+                                          anyOrder=free)[0][0]["kind"], "early")  # fmt: skip
+        self.assertEqual(pl.classifyDrops(["A1"], 2, steps, done, pl.wellTimers(steps, done, 170.0),
+                                          anyOrder=free)[0][0]["kind"], "ok")  # fmt: skip
+
+    def testRunModeAndAnyOrderInputs(self):
+        self.assertEqual(pl.normalizeRunMode("free"), "free")
+        with self.assertRaises(ValueError):
+            pl.normalizeRunMode("fast")
+        self.assertEqual(pl.cleanAnyOrder(["b2", "A1", "a1"]), ["A1", "B2"])
+        with self.assertRaises(ValueError):
+            pl.cleanAnyOrder("A1")
+
     def testTimersRunPerWell(self):
         steps = [add(1, "A1", "B1"), wait(60), add(2, "A1", "B1")]
         self.assertEqual(
@@ -181,6 +216,39 @@ class StoreTests(unittest.TestCase):
         self.s.startRun()
         if active is not None:
             self.s.setActiveCompound(active)
+
+    def testRunModeAndAnyOrderAreStoredAndUsed(self):
+        st = self.s.getState()
+        self.assertEqual((st["run"]["mode"], st["plate"]["anyOrder"]), ("guided", []))
+        self.s.setRunMode("free")
+        self.assertEqual(self.s.getState()["run"]["mode"], "free")
+        self.s.savePlan([add(self.a, "A1", "A2"), add(self.b, "A1", "A2")])
+        self.s.startRun()
+        self.s.setAnyOrder(["a2"], True)
+        self.assertEqual(self.s.getPlate()["anyOrder"], ["A2"])
+        r = self.s.reportDrop(["A1", "A2"], self.b)  # b before a: wrong order in A1 only
+        self.assertEqual([x["kind"] for x in r["results"]], ["order", "ok"])
+        self.s.setAnyOrder(["A2"], False)
+        self.assertEqual(self.s.getPlanPayload()["anyOrder"], [])
+        with self.assertRaises(ValueError):
+            self.s.setAnyOrder(["A1"], "yes")
+
+    def testCameraMistakesAreIgnored(self):
+        self.startRun({"A1": self.a, "B1": self.a}, self.a)
+        r = self.s.reportDrop(["A1", "C5"], ignoreMistakes=True)  # C5: unplanned, as if it never happened
+        self.assertEqual(([x["well"] for x in r["results"]], r["ignored"], r["alarm"]), (["A1"], ["C5"], None))
+        self.assertEqual([e["well"] for e in self.s.getState()["events"]], ["A1"])
+        self.assertEqual(self.s.reportDrop(["C5"])["alarm"]["well"], "C5")  # other sources still raise it
+
+    def testRecordSettingReachesTheCamera(self):
+        self.assertEqual((self.s.getState()["run"]["record"], self.s.getPlanPayload()["record"]), (False, False))
+        self.s.setRecord(True)
+        self.startRun({"A1": self.a})
+        pay = self.s.getPlanPayload()
+        self.assertEqual((pay["record"], pay["status"]), (True, "active"))
+        self.assertIsInstance(pay["startedAt"], float)  # tells this run from the next one: one video per run
+        with self.assertRaises(ValueError):
+            self.s.setRecord("yes")
 
     def testSeedsDemoOnceOnly(self):
         self.assertEqual(len(self.ids), len(pl.DEMO_COMPOUNDS))
@@ -376,7 +444,10 @@ class ServerTests(unittest.TestCase):
         cls.appModule = appModule
         cls.tmp = tempfile.TemporaryDirectory()
         cls.port = freePort()
-        cls.app = appModule.createApp(os.path.join(cls.tmp.name, "t.db"), apiToken=cls.TOKEN)
+        stub = lambda cam, show: [sys.executable, "-c", "import time; time.sleep(30)"]  # noqa: E731 (no real camera)
+        cams = lambda: [{"index": 0, "width": 1280, "height": 720, "name": "Test cam", "thumb": "data:,"}]  # noqa: E731
+        cls.app = appModule.createApp(os.path.join(cls.tmp.name, "t.db"), apiToken=cls.TOKEN, makeLiveCommand=stub,
+                                      cameraFinder=cams)  # fmt: skip
         config = uvicorn.Config(cls.app, host="127.0.0.1", port=cls.port, log_level="warning",
                                 timeout_graceful_shutdown=1)  # fmt: skip
         cls.server = uvicorn.Server(config)
@@ -404,6 +475,65 @@ class ServerTests(unittest.TestCase):
         self.call("POST", "/api/a1Corner", {"a1Corner": "auto"})
         self.ids = [c["id"] for c in self.call("GET", "/api/state")[1]["compounds"]]
 
+    def testLiveCameraStartStop(self):
+        status, body = self.call("POST", "/api/live/start", {"camera": "2", "show": False})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["state"]["live"]["running"])
+        self.assertEqual(body["state"]["live"]["camera"], "2")
+        status, body = self.call("POST", "/api/live/start", {"camera": "0"})
+        self.assertEqual(status, 400)  # one camera process at a time
+        status, body = self.call("POST", "/api/live/stop")
+        self.assertEqual(status, 200)
+        self.assertFalse(body["state"]["live"]["running"])
+        self.assertEqual(body["state"]["live"]["log"], [])  # stopped on purpose: no error shown
+
+    def testCameraFlip(self):
+        status, body = self.call("POST", "/api/cameraFlip", {"flipH": True})
+        self.assertEqual((status, body["state"]["cameraFlip"]), (200, {"flipH": True, "flipV": False}))
+        self.assertEqual(
+            self.call("GET", "/api/plan")[1]["cameraFlip"], {"flipH": True, "flipV": False}
+        )  # camera reads it
+        self.assertEqual(self.call("POST", "/api/cameraFlip", {"flipV": "yes"})[0], 400)
+        saved = json.load(open(os.path.join(self.tmp.name, "cameraFlip.json")))
+        self.assertEqual(saved, {"flipH": True, "flipV": False})  # kept for the next start
+        self.call("POST", "/api/cameraFlip", {"flipH": False})
+
+    def testFindCameras(self):
+        status, body = self.call("GET", "/api/live/cameras")
+        self.assertEqual((status, [c["index"] for c in body["cameras"]]), (200, [0]))
+        self.call("POST", "/api/live/start", {"camera": "0", "show": False})
+        status, body = self.call("GET", "/api/live/cameras")
+        self.assertEqual(status, 400)  # a running camera cannot be opened twice
+        self.assertIn("Stop the camera first", body["error"])
+        self.call("POST", "/api/live/stop")
+
+    def testFindCamerasWithFakeCameras(self):
+        import numpy as np
+        from liveCamera import findCameras
+
+        class Cam:
+            def __init__(self, w):
+                self.w = w
+
+            def read(self):
+                return True, np.full((self.w * 9 // 16, self.w, 3), 120, np.uint8)
+
+            def release(self):
+                pass
+
+        present = {0: Cam(1280), 2: Cam(640)}  # camera 1 missing; 3 and 4 missing ends the search
+        found = findCameras(opener=lambda i: present.get(i))
+        self.assertEqual([(c["index"], c["width"], c["height"]) for c in found], [(0, 1280, 720), (2, 640, 360)])
+        self.assertTrue(found[0]["thumb"].startswith("data:image/jpeg;base64,"))
+
+    def testLiveCommand(self):
+        from liveCamera import liveCommand
+
+        cmd = liveCommand("1", "http://127.0.0.1:7500")
+        self.assertTrue(cmd[1].endswith(os.path.join("scripts", "live_demo.py")))
+        self.assertEqual(cmd[2:], ["--camera", "1", "--ui", "http://127.0.0.1:7500", "--show"])
+        self.assertNotIn("--show", liveCommand("1", "http://x", show=False))
+
     def call(self, method, path, body=None, token=None, raw=None):
         data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
         headers = {"Content-Type": "application/json"}
@@ -429,6 +559,50 @@ class ServerTests(unittest.TestCase):
             with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=5) as r:
                 self.assertEqual((r.status, r.headers.get("Cache-Control")), (200, "no-cache"))
                 self.assertIn(needle, r.read())
+
+    def testInstallableAppManifestAndIcons(self):
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/manifest.webmanifest", timeout=5) as r:
+            self.assertEqual(r.headers.get("Content-Type"), "application/manifest+json")
+            m = json.loads(r.read())
+        self.assertEqual((m["name"], m["start_url"], m["display"]), ("PipetteCoach", "/", "standalone"))
+        for icon in m["icons"]:  # every icon the manifest names is served
+            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{icon['src']}", timeout=5) as r:
+                self.assertEqual(r.status, 200)
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/", timeout=5) as r:
+            page = r.read()
+        self.assertIn(b'rel="manifest" href="/manifest.webmanifest"', page)
+        self.assertIn(b'id="fullBtn"', page)
+
+    def testAppWindowOpensBrowserInAppModeFullScreen(self):
+        url = f"http://127.0.0.1:{self.port}"
+        with tempfile.TemporaryDirectory() as d:
+            exe, out = os.path.join(d, "fakeBrowser"), os.path.join(d, "args.json")
+            with open(exe, "w") as f:  # a stand-in browser that writes down how it was started
+                f.write(f"#!{sys.executable}\nimport json, sys\njson.dump(sys.argv[1:], open({out!r}, 'w'))\n")
+            os.chmod(exe, 0o755)
+            self.appModule.openAppWindow(url, browsers=("/no/such/browser", exe), profileDir=d).wait(10)
+            args = json.load(open(out))
+        self.assertIn(f"--app={url}", args)
+        self.assertIn("--start-fullscreen", args)
+        self.assertIn(f"--user-data-dir={d}", args)
+
+    def testRunModeAndAnyOrderEndpoints(self):
+        status, body = self.call("POST", "/api/runMode", {"mode": "free"})
+        self.assertEqual((status, body["state"]["run"]["mode"]), (200, "free"))
+        self.assertEqual(self.call("POST", "/api/runMode", {"mode": "x"})[0], 400)
+        status, body = self.call("POST", "/api/anyOrder", {"wells": ["B3"], "anyOrder": True})
+        self.assertEqual((status, body["state"]["plate"]["anyOrder"]), (200, ["B3"]))
+        self.call("POST", "/api/anyOrder", {"wells": ["B3"], "anyOrder": False})
+        self.call("POST", "/api/runMode", {"mode": "guided"})
+
+    def testRecordEndpointAndRecPill(self):
+        status, body = self.call("POST", "/api/record", {"record": True})
+        self.assertEqual((status, body["state"]["run"]["record"]), (200, True))
+        self.call("POST", "/api/camera/heartbeat", {"recording": "run_1.mp4"}, token=self.TOKEN)
+        self.assertEqual(self.call("GET", "/api/state")[1]["camera"]["recording"], "run_1.mp4")
+        self.call("POST", "/api/camera/heartbeat", {"recording": None}, token=self.TOKEN)
+        self.assertIsNone(self.call("GET", "/api/state")[1]["camera"]["recording"])
+        self.call("POST", "/api/record", {"record": False})
 
     def testSimulatorDropsAreJudgedLikeCameraDropsWithoutToken(self):
         cid = self.call("GET", "/api/state")[1]["compounds"][0]["id"]
@@ -464,7 +638,8 @@ class ServerTests(unittest.TestCase):
         status, health = self.call("GET", "/api/health")
         self.assertEqual((status, health["ok"], health["tokenRequired"]), (200, True, True))
         st = self.call("GET", "/api/state")[1]
-        self.assertEqual(set(st), {"compounds", "plate", "run", "events", "camera", "tip", "serverId", "revision"})
+        keys = {"compounds", "plate", "run", "events", "camera", "live", "cameraFlip", "tip", "serverId", "revision"}
+        self.assertEqual(set(st), keys)
         self.assertEqual((st["plate"]["rows"], st["plate"]["columns"]), (8, 12))
 
     def testCompoundCrudAndErrors(self):
@@ -509,7 +684,10 @@ class ServerTests(unittest.TestCase):
         self.assertEqual((status, res["accepted"], res["reason"]), (200, False, "runNotStarted"))
         self.startRun({"A1": a, "B1": b}, active=a)
         res = self.call("POST", "/api/drop", {"well": "B1"}, token=self.TOKEN)[1]
-        self.assertEqual(res["alarm"]["kind"], "wrong")
+        self.assertEqual((res["alarm"], res["ignored"]), (None, ["B1"]))  # the live camera's mistakes: ignored
+        self.assertEqual(self.call("GET", "/api/state")[1]["events"], [])
+        res = self.call("POST", "/api/testDrop", {"well": "B1", "compoundId": a})[1]
+        self.assertEqual(res["alarm"]["kind"], "wrong")  # the Test buttons still raise it
         self.assertEqual(self.call("POST", "/api/drop", {"wells": ["A13"]}, token=self.TOKEN)[0], 400)
         self.call("POST", "/api/alarm/ack")
         self.assertIsNone(self.call("GET", "/api/state")[1]["run"]["alarm"])
@@ -550,7 +728,7 @@ class ServerTests(unittest.TestCase):
             name, first = self.readEvent(resp)
             self.assertEqual(name, "state")
             self.assertIsNone(first["run"]["alarm"])  # a new page gets the full state at once
-            self.call("POST", "/api/drop", {"wells": ["B1"]}, token=self.TOKEN)  # camera sees a mistake
+            self.call("POST", "/api/sim/drop", {"wells": ["B1"]})  # a mistake (the live camera's are ignored)
             alarm = None
             for _ in range(5):  # skip the 'camera came online' update if it arrives first
                 _, st = self.readEvent(resp)
@@ -573,7 +751,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(items, [None])  # the stream ends; the browser reconnects and resyncs
 
     # ---- the fake camera, against the real server
-    def testFakeCameraFinishesTheRunAndItsMistakesRaiseAlarms(self):
+    def testFakeCameraFinishesTheRunAndItsMistakesAreIgnored(self):
         import simulateCamera as cam
 
         a, b = self.ids[0], self.ids[1]
@@ -600,7 +778,8 @@ class ServerTests(unittest.TestCase):
         self.assertTrue(finished)
         st = self.call("GET", "/api/state")[1]
         self.assertEqual((st["run"]["status"], st["run"]["progress"]), ("complete", {"done": 4, "total": 4}))
-        self.assertEqual(len(acked), 4)  # one mistake per addition (wrong, order or duplicate), all caught
+        self.assertEqual(acked, [])  # one mistake per addition, every one ignored: no alarm to acknowledge
+        self.assertEqual({e["kind"] for e in st["events"]}, {"ok"})
 
     def testFakeCameraErrorsAreReadable(self):
         import simulateCamera as cam

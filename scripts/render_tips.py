@@ -25,7 +25,7 @@ from render_all import encode  # noqa: E402
 from render_plate_rebuild import draw  # noqa: E402
 from run_live import add_zoom, draw_log  # noqa: E402
 
-from pipette_coach.config import REPO_ROOT, load_config  # noqa: E402
+from pipette_coach.config import REPO_ROOT, TIP_MODEL, load_config  # noqa: E402
 from pipette_coach.localizer.detector import PlateDetector, _default_device  # noqa: E402
 from pipette_coach.localizer.geometry import GRID, pitch_px, project  # noqa: E402
 from pipette_coach.localizer.live import PlateTracker  # noqa: E402
@@ -44,7 +44,7 @@ def main() -> None:
     ap.add_argument("--video", required=True)
     ap.add_argument("--start", type=float, default=0)
     ap.add_argument("--seconds", type=float, default=60, help="0 = to the end")
-    ap.add_argument("--model", required=True)
+    ap.add_argument("--model", default=TIP_MODEL)
     ap.add_argument("--conf", type=float, default=0.5)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--track-every", type=int, default=2)

@@ -23,3 +23,11 @@ models/
 
 # Local clone of the GitHub repo (not part of this tree)
 PipetteCoach/
+
+# Kiro steering and skills (markdown, but pushed)
+!.kiro/**/*.md
+
+# Raw demo footage (large) and local Claude settings stay local
+Videos/*.mov
+Videos/*.MOV
+.claude/

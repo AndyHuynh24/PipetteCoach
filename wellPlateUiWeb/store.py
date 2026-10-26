@@ -38,7 +38,10 @@ CREATE TABLE IF NOT EXISTS plate (
     activeCompoundId  INTEGER,
     a1Corner          TEXT    NOT NULL DEFAULT 'auto',
     startedAt         REAL,
-    stepDoneAt        TEXT    NOT NULL DEFAULT '{}'
+    stepDoneAt        TEXT    NOT NULL DEFAULT '{}',
+    runMode           TEXT    NOT NULL DEFAULT 'guided',
+    anyOrder          TEXT    NOT NULL DEFAULT '[]',
+    record            INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS events (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,6 +82,11 @@ class PlateStore:
             if "startedAt" not in cols:  # made before timers existed
                 c.execute("ALTER TABLE plate ADD COLUMN startedAt REAL")
                 c.execute("ALTER TABLE plate ADD COLUMN stepDoneAt TEXT NOT NULL DEFAULT '{}'")
+            if "runMode" not in cols:  # made before free run mode existed
+                c.execute("ALTER TABLE plate ADD COLUMN runMode TEXT NOT NULL DEFAULT 'guided'")
+                c.execute("ALTER TABLE plate ADD COLUMN anyOrder TEXT NOT NULL DEFAULT '[]'")
+            if "record" not in cols:  # made before "Record each run" existed
+                c.execute("ALTER TABLE plate ADD COLUMN record INTEGER NOT NULL DEFAULT 0")
         with self._tx() as c:
             c.execute(
                 "INSERT OR IGNORE INTO plate(id, status, plan, done, alarm, activeCompoundId)"
@@ -123,6 +131,9 @@ class PlateStore:
             "a1Corner": row["a1Corner"],
             "startedAt": row["startedAt"],
             "stepDoneAt": json.loads(row["stepDoneAt"]),
+            "runMode": row["runMode"],
+            "anyOrder": json.loads(row["anyOrder"]),
+            "record": bool(row["record"]),
         }
 
     def _readCompounds(self, c):
@@ -161,14 +172,14 @@ class PlateStore:
                     (clean["name"], clean["tag"], clean["volumeUl"], clean["color"], compoundId),
                 )
                 if cur.rowcount == 0:
-                    raise pl.NotFoundError("That compound no longer exists.")
+                    raise pl.NotFoundError("That substance no longer exists.")
             return self._compound(c.execute("SELECT * FROM compounds WHERE id = ?", (compoundId,)).fetchone())
 
     def deleteCompound(self, compoundId):
         """Remove a compound and its steps."""
         with self._tx() as c:
             if not c.execute("SELECT 1 FROM compounds WHERE id = ?", (compoundId,)).fetchone():
-                raise pl.NotFoundError("That compound no longer exists.")
+                raise pl.NotFoundError("That substance no longer exists.")
             plate = self._readPlate(c)
             mine = [st for st in plate["plan"] if st["kind"] == "add" and st["compoundId"] == compoundId]
             wells = sum(len(st["wells"]) for st in mine)
@@ -208,8 +219,32 @@ class PlateStore:
         with self._tx() as c:
             if compoundId is not None:
                 if not c.execute("SELECT 1 FROM compounds WHERE id = ?", (compoundId,)).fetchone():
-                    raise pl.NotFoundError("Unknown compound.")
+                    raise pl.NotFoundError("Unknown substance.")
             c.execute("UPDATE plate SET activeCompoundId = ? WHERE id = 1", (compoundId,))
+
+    def setRunMode(self, mode):
+        """Guided or free run (only how the page guides the user; every drop is judged the same way)."""
+        mode = pl.normalizeRunMode(mode)
+        with self._tx() as c:
+            c.execute("UPDATE plate SET runMode = ? WHERE id = 1", (mode,))
+
+    def setRecord(self, on):
+        """Record each run: the camera code saves the raw camera video from Start run to the run's end."""
+        if not isinstance(on, bool):
+            raise ValueError("record must be true or false.")
+        with self._tx() as c:
+            c.execute("UPDATE plate SET record = ? WHERE id = 1", (int(on),))
+
+    def setAnyOrder(self, wells, anyOrder):
+        """Mark wells as taking their substances in any order (True) or in their planned order (False).
+        Allowed during a run: it only loosens or tightens how the next drops are judged."""
+        if not isinstance(anyOrder, bool):
+            raise ValueError("anyOrder must be true or false.")
+        wells = set(pl.cleanAnyOrder(wells))
+        with self._tx() as c:
+            now = set(self._readPlate(c)["anyOrder"])
+            now = now | wells if anyOrder else now - wells
+            c.execute("UPDATE plate SET anyOrder = ? WHERE id = 1", (json.dumps(pl.sortWells(now)),))
 
     def setA1Corner(self, corner):
         """Where well A1 is in the camera picture (the camera code reads it from the plan)."""
@@ -241,9 +276,10 @@ class PlateStore:
                 status = "complete"
             c.execute("UPDATE plate SET alarm = NULL, status = ? WHERE id = 1", (status,))
 
-    def markWellDone(self, well):
+    def markWellDone(self, well, compoundId=None):
         """The "Next well" button overrides the camera: the well counts as dispensed with the compound it needs
-        next, exactly like a detected drop (logged with source "manual"). Refused while its timer runs."""
+        next (or compoundId: free run, the substance in the tip), exactly like a detected drop (logged with source
+        "manual"). Refused while its timer runs."""
         well = pl.normalizeWell(well)
         plate = self.getPlate()
         if plate["status"] != "active":
@@ -252,17 +288,19 @@ class PlateStore:
         step = pl.nextStepFor(steps, done, well)
         if step is None:
             raise ValueError(f"{well} has everything it needs.")
-        cid = steps[step]["compoundId"]
-        r = pl.classifyDrops([well], cid, steps, done, pl.wellTimers(steps, done, time.time()))[0][0]
+        cid = steps[step]["compoundId"] if compoundId is None else pl.optionalId(compoundId, "compoundId")
+        timers = pl.wellTimers(steps, done, time.time())
+        r = pl.classifyDrops([well], cid, steps, done, timers, anyOrder=set(plate["anyOrder"]))[0][0]
         if r["kind"] != "ok":
             raise ValueError(
                 f"{well}: its timer is still running." if r["kind"] == "early" else f"{well} is not ready."
             )
         return self.reportDrop([well], cid, source="manual")
 
-    def reportDrop(self, wells, compoundId=None, source="camera"):
+    def reportDrop(self, wells, compoundId=None, source="camera", ignoreMistakes=False):
         """A tip dispensed into these wells. compoundId=None means "whatever the
-        user has selected as active"."""
+        user has selected as active". ignoreMistakes (the live camera): a drop that is not a match is treated as
+        if nothing happened (not logged, no alarm), since the camera may have the wrong well."""
         source = str(source or "camera")[:20]
         with self._tx() as c:
             plate = self._readPlate(c)
@@ -276,11 +314,15 @@ class PlateStore:
                 return {"accepted": False, "reason": "noActiveCompound"}
             names = {x["id"]: x["name"] for x in self._readCompounds(c)}
             if cid not in names:
-                raise pl.NotFoundError("Unknown compound.")
+                raise pl.NotFoundError("Unknown substance.")
 
             steps, nowS = plate["plan"], time.time()
             timers = pl.wellTimers(steps, plate["done"], nowS)
-            results, newDone = pl.classifyDrops(wells, cid, steps, plate["done"], timers, nowS)  # stores drop times
+            results, newDone = pl.classifyDrops(
+                wells, cid, steps, plate["done"], timers, nowS, anyOrder=set(plate["anyOrder"])
+            )  # stores drop times
+            ignored = [r["well"] for r in results if r["kind"] != "ok"] if ignoreMistakes else []
+            results = [r for r in results if r["well"] not in ignored]
             now = nowIso()
             for r in results:
                 c.execute(
@@ -309,6 +351,7 @@ class PlateStore:
                 ],
                 "alarm": alarm,
                 "complete": complete,
+                "ignored": ignored,
             }
 
     def judgeTip(self, well):
@@ -320,9 +363,8 @@ class PlateStore:
             if plate["status"] not in ("active", "complete") or cid is None:
                 return None
             steps = plate["plan"]
-            r = pl.classifyDrops([well], cid, steps, plate["done"], pl.wellTimers(steps, plate["done"], time.time()))[
-                0
-            ][0]
+            timers = pl.wellTimers(steps, plate["done"], time.time())
+            r = pl.classifyDrops([well], cid, steps, plate["done"], timers, anyOrder=set(plate["anyOrder"]))[0][0]
             names = {x["id"]: x["name"] for x in self._readCompounds(c)}
             return {"kind": r["kind"], "planned": names.get(r["plannedId"]), "compound": names.get(cid)}
 
@@ -336,10 +378,13 @@ class PlateStore:
             evRows = c.execute("SELECT * FROM events ORDER BY id DESC LIMIT ?", (int(eventLimit),)).fetchall()
             return {
                 "compounds": self._readCompounds(c),
-                "plate": {"rows": pl.ROWS, "columns": pl.COLUMNS, "steps": steps, "a1Corner": plate["a1Corner"]},
+                "plate": {"rows": pl.ROWS, "columns": pl.COLUMNS, "steps": steps, "a1Corner": plate["a1Corner"],
+                          "anyOrder": plate["anyOrder"]},  # fmt: skip
                 "run": {
                     "status": plate["status"],
                     "activeCompoundId": plate["activeCompoundId"],
+                    "mode": plate["runMode"],
+                    "record": plate["record"],
                     "done": plate["done"],
                     "alarm": plate["alarm"],
                     "progress": {"done": done, "total": total},
@@ -369,12 +414,15 @@ class PlateStore:
                 "plate": {"wells": pl.ROWS * pl.COLUMNS, "rows": pl.ROWS, "columns": pl.COLUMNS},
                 "a1Corner": plate["a1Corner"],
                 "status": plate["status"],
+                "startedAt": plate["startedAt"],  # tells one run from the next (the camera records each run)
+                "record": plate["record"],
                 "activeCompoundId": plate["activeCompoundId"],
                 "compounds": [
                     {"id": x["id"], "name": x["name"], "tag": x["tag"], "volumeUl": x["volumeUl"], "color": x["color"]}
                     for x in self._readCompounds(c)
                 ],
                 "steps": plate["plan"],
+                "anyOrder": plate["anyOrder"],
                 "wells": {
                     w: [plate["plan"][i]["compoundId"] for i in seq]
                     for w, seq in sorted(pl.wellSequences(plate["plan"]).items(), key=lambda kv: pl.parseWell(kv[0]))

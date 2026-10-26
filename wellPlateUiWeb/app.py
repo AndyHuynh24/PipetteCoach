@@ -2,6 +2,7 @@
 
     pip install -r requirements.txt
     python app.py                     # then open http://localhost:7500
+    python app.py --app               # same, and open it full screen in its own window (Chrome/Edge app mode)
 
 The browser shows the UI. The camera code (scripts/live_demo.py --ui) reports
 every dispense it has confirmed with one HTTP call:
@@ -23,15 +24,20 @@ import json
 import logging
 import os
 import socket
+import subprocess
 import sys
+import threading
 import time
+import urllib.request
 import uuid
+import webbrowser
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)  # so `python wellPlateUiWeb/app.py` works from any folder
 
 import plateLogic as pl  # noqa: E402
 import uvicorn  # noqa: E402
+from liveCamera import LiveCamera, findCameras, liveCommand  # noqa: E402
 from starlette.applications import Starlette  # noqa: E402
 from starlette.exceptions import HTTPException  # noqa: E402
 from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse  # noqa: E402
@@ -90,6 +96,7 @@ class CameraLink:
     def __init__(self):
         self.lastSeenMono = None
         self.lastSeenIso = None
+        self.recording = None  # the file the camera says it is recording (heartbeat), or None
 
     def touch(self):
         self.lastSeenMono = time.monotonic()
@@ -99,13 +106,25 @@ class CameraLink:
         return self.lastSeenMono is not None and time.monotonic() - self.lastSeenMono < CAMERA_ONLINE_SECONDS
 
     def snapshot(self):
-        return {"online": self.online(), "lastSeen": self.lastSeenIso}
+        online = self.online()
+        return {"online": online, "lastSeen": self.lastSeenIso, "recording": self.recording if online else None}
 
 
-def createApp(dbPath=DEFAULT_DB, apiToken=None, seedDemo=True):
+def createApp(dbPath=DEFAULT_DB, apiToken=None, seedDemo=True, uiUrl="http://127.0.0.1:7500", makeLiveCommand=None,
+              cameraFinder=findCameras):
     store = PlateStore(dbPath, seedDemo=seedDemo)
     hub = Hub()
     camera = CameraLink()
+    # The live camera started from the page (Start camera button): scripts/live_demo.py reporting to uiUrl.
+    # Flip of the camera picture (camera mounted mirrored / upside down): a small file next to the database.
+    flipPath = os.path.join(os.path.dirname(os.path.abspath(dbPath)), "cameraFlip.json")
+    try:
+        with open(flipPath) as f:
+            cameraFlip = {k: bool(json.load(f).get(k)) for k in ("flipH", "flipV")}
+    except (OSError, ValueError, AttributeError):
+        cameraFlip = {"flipH": False, "flipV": False}
+    live = LiveCamera(makeLiveCommand or (lambda cam, show: liveCommand(cam, uiUrl, show)),
+                      os.path.join(os.path.dirname(os.path.abspath(dbPath)), "liveCamera.log"))  # fmt: skip
 
     # Where the camera (or the simulator page) sees the tip right now. Memory only: it changes many times a second.
     tip = {"well": None, "since": None, "added": False}
@@ -118,6 +137,8 @@ def createApp(dbPath=DEFAULT_DB, apiToken=None, seedDemo=True):
         revision[0] += 1
         state = store.getState()
         state["camera"] = camera.snapshot()
+        state["live"] = live.snapshot()
+        state["cameraFlip"] = dict(cameraFlip)
         state["tip"] = tipInfo()
         state["serverId"] = serverId
         state["revision"] = revision[0]
@@ -193,6 +214,10 @@ def createApp(dbPath=DEFAULT_DB, apiToken=None, seedDemo=True):
     async def index(request):
         return FileResponse(os.path.join(STATIC_DIR, "index.html"), headers={"Cache-Control": "no-cache"})
 
+    async def manifest(request):
+        return FileResponse(os.path.join(STATIC_DIR, "manifest.webmanifest"), media_type="application/manifest+json",
+                            headers={"Cache-Control": "no-cache"})  # fmt: skip
+
     async def simulatorPage(request):
         return FileResponse(os.path.join(STATIC_DIR, "camera.html"), headers={"Cache-Control": "no-cache"})
 
@@ -205,7 +230,7 @@ def createApp(dbPath=DEFAULT_DB, apiToken=None, seedDemo=True):
 
     @api
     async def getPlan(request):
-        return JSONResponse(store.getPlanPayload())
+        return JSONResponse({**store.getPlanPayload(), "cameraFlip": dict(cameraFlip)})
 
     async def stream(request):
         q = hub.subscribe()
@@ -254,8 +279,38 @@ def createApp(dbPath=DEFAULT_DB, apiToken=None, seedDemo=True):
         return reply()
 
     @api
+    async def setRunMode(request):
+        store.setRunMode((await readJson(request)).get("mode"))
+        return reply()
+
+    @api
+    async def setRecord(request):
+        store.setRecord((await readJson(request)).get("record"))
+        return reply()
+
+    @api
+    async def setAnyOrder(request):
+        data = await readJson(request)
+        store.setAnyOrder(data.get("wells"), data.get("anyOrder"))
+        return reply()
+
+    @api
     async def setA1Corner(request):
         store.setA1Corner((await readJson(request)).get("a1Corner"))
+        return reply()
+
+    @api
+    async def setCameraFlip(request):
+        """Flip buttons: the camera code reads this with the A1 corner (every few seconds) and flips every frame."""
+        data = await readJson(request)
+        for k in ("flipH", "flipV"):
+            if k in data:
+                if not isinstance(data[k], bool):
+                    raise ValueError(f"{k} must be true or false.")
+                cameraFlip[k] = data[k]
+        os.makedirs(os.path.dirname(flipPath), exist_ok=True)
+        with open(flipPath, "w") as f:
+            json.dump(cameraFlip, f)
         return reply()
 
     @api
@@ -270,7 +325,8 @@ def createApp(dbPath=DEFAULT_DB, apiToken=None, seedDemo=True):
 
     @api
     async def nextWell(request):
-        return reply(store.markWellDone((await readJson(request)).get("well", "")))
+        data = await readJson(request)
+        return reply(store.markWellDone(data.get("well", ""), data.get("compoundId")))
 
     @api
     async def acknowledgeAlarm(request):
@@ -281,7 +337,10 @@ def createApp(dbPath=DEFAULT_DB, apiToken=None, seedDemo=True):
     async def handleDrop(request, source):
         data = await readJson(request)
         compoundId = pl.optionalId(data.get("compoundId"), "compoundId")
-        result = store.reportDrop(data.get("wells", data.get("well")), compoundId, source)
+        # The live camera's mistakes are ignored (the user's choice: a wrong-well detection is more likely the camera
+        # than the pipette); the test buttons and the simulator still raise alarms, to show them on purpose.
+        wells = data.get("wells", data.get("well"))
+        result = store.reportDrop(wells, compoundId, source, ignoreMistakes=source == "camera")
         if result["accepted"]:
             for r in result["results"]:
                 if r["kind"] == "ok" and r["well"] == tip["well"]:
@@ -325,10 +384,42 @@ def createApp(dbPath=DEFAULT_DB, apiToken=None, seedDemo=True):
         cameraSeen()
         return JSONResponse({"ok": True})
 
+    def localOnly(request):
+        """Starting a process on this computer is only allowed from this computer (the server may be on the LAN)."""
+        if not request.client or request.client.host not in ("127.0.0.1", "::1", "localhost"):
+            raise PermissionError("The live camera can only be started or stopped on the computer running the server.")
+
+    @api
+    async def startLive(request):
+        """Start button: run the live camera (scripts/live_demo.py --ui) as its own process."""
+        localOnly(request)
+        data = await readJson(request)
+        live.start(data.get("camera", "0"), bool(data.get("show", True)))
+        return reply({"ok": True})
+
+    @api
+    async def listCameras(request):
+        """Find cameras: every camera that opens, with a small snapshot so the user can tell them apart."""
+        localOnly(request)
+        if live.running():
+            raise ValueError("Stop the camera first, then look for cameras (a running camera cannot be opened twice).")
+        return JSONResponse({"cameras": await asyncio.to_thread(cameraFinder)})
+
+    @api
+    async def stopLive(request):
+        localOnly(request)
+        live.stop()
+        return reply({"ok": True})
+
     @api
     async def postHeartbeat(request):
-        """The camera code calls this every few seconds so the page can show 'Camera: online'."""
+        """The camera code calls this every second so the page can show 'Camera: online' (and REC while it records)."""
         cameraCall(request)
+        recording = (await readJson(request)).get("recording")
+        recording = str(recording)[:120] if recording else None
+        if recording != camera.recording:
+            camera.recording = recording
+            pushState()
         return JSONResponse({"ok": True})
 
     # ------------------------------------------------------------ lifecycle
@@ -336,8 +427,12 @@ def createApp(dbPath=DEFAULT_DB, apiToken=None, seedDemo=True):
     async def lifespan(app):
         async def watchCamera():
             last = camera.online()
+            liveLast = live.running()
             while True:
                 await asyncio.sleep(2)
+                if live.running() != liveLast:  # the camera window was closed, or it crashed
+                    liveLast = live.running()
+                    pushState()
                 if camera.online() != last:
                     last = camera.online()
                     if not last:
@@ -349,11 +444,13 @@ def createApp(dbPath=DEFAULT_DB, apiToken=None, seedDemo=True):
             yield
         finally:
             task.cancel()
+            live.stop()  # never leave a camera process behind
             with contextlib.suppress(asyncio.CancelledError):
                 await task
 
     routes = [
         Route("/", index),
+        Route("/manifest.webmanifest", manifest),
         Route("/camera", simulatorPage),
         Route("/api/health", health),
         Route("/api/state", getState),
@@ -365,6 +462,10 @@ def createApp(dbPath=DEFAULT_DB, apiToken=None, seedDemo=True):
         Route("/api/compounds/{compoundId:int}", deleteCompound, methods=["DELETE"]),
         Route("/api/activeCompound", setActiveCompound, methods=["POST"]),
         Route("/api/a1Corner", setA1Corner, methods=["POST"]),
+        Route("/api/runMode", setRunMode, methods=["POST"]),
+        Route("/api/anyOrder", setAnyOrder, methods=["POST"]),
+        Route("/api/record", setRecord, methods=["POST"]),
+        Route("/api/cameraFlip", setCameraFlip, methods=["POST"]),
         Route("/api/run/start", startRun, methods=["POST"]),
         Route("/api/run/reset", resetRun, methods=["POST"]),
         Route("/api/run/nextWell", nextWell, methods=["POST"]),
@@ -372,6 +473,9 @@ def createApp(dbPath=DEFAULT_DB, apiToken=None, seedDemo=True):
         Route("/api/drop", postDrop, methods=["POST"]),
         Route("/api/testDrop", postTestDrop, methods=["POST"]),
         Route("/api/camera/heartbeat", postHeartbeat, methods=["POST"]),
+        Route("/api/live/start", startLive, methods=["POST"]),
+        Route("/api/live/stop", stopLive, methods=["POST"]),
+        Route("/api/live/cameras", listCameras, methods=["GET"]),
         Route("/api/camera/tip", postCameraTip, methods=["POST"]),
         Route("/api/sim/drop", postSimDrop, methods=["POST"]),
         Route("/api/sim/tip", postSimTip, methods=["POST"]),
@@ -389,6 +493,7 @@ def createApp(dbPath=DEFAULT_DB, apiToken=None, seedDemo=True):
     app.state.store = store
     app.state.hub = hub
     app.state.camera = camera
+    app.state.live = live
     return app
 
 
@@ -404,6 +509,34 @@ def lanAddress():
         s.close()
 
 
+APP_PROFILE = os.path.join(HERE, "data", "appWindow")  # the app window's own browser profile (not pushed: data/)
+APP_BROWSERS = (  # Chromium browsers with an app mode (a window with no tabs or address bar)
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+)
+
+
+def openAppWindow(url, fullScreen=True, browsers=APP_BROWSERS, profileDir=APP_PROFILE):
+    """Open url as its own app window, full screen, once the server answers. Uses a separate browser profile so it is
+    a new browser process even when Chrome is already open (otherwise --start-fullscreen is ignored); falls back to
+    the default browser. Returns the started process or None."""
+    for _ in range(100):  # the server starts in the main thread right after this is scheduled
+        with contextlib.suppress(OSError):
+            urllib.request.urlopen(url + "/api/health", timeout=1).close()
+            break
+        time.sleep(0.1)
+    exe = next((b for b in browsers if os.path.exists(b)), None)
+    if exe is None:
+        webbrowser.open(url)
+        return None
+    cmd = [exe, f"--app={url}", f"--user-data-dir={profileDir}", "--no-first-run", "--no-default-browser-check",
+           "--autoplay-policy=no-user-gesture-required"]  # the app's sounds play before the first click
+    if fullScreen:
+        cmd.append("--start-fullscreen")
+    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Well Plate UI server")
     parser.add_argument(
@@ -413,11 +546,13 @@ def main():
     )
     parser.add_argument("--port", type=int, default=7500)
     parser.add_argument("--db", default=DEFAULT_DB, help="path of the SQLite file")
+    parser.add_argument("--app", action="store_true", help="open the UI full screen in its own window (Chrome/Edge)")
+    parser.add_argument("--windowed", action="store_true", help="with --app: a normal-sized window, not full screen")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     token = os.environ.get("WELLPLATE_API_TOKEN") or None
-    app = createApp(args.db, token)
+    app = createApp(args.db, token, uiUrl=f"http://127.0.0.1:{args.port}")
 
     print("\nWell Plate UI")
     print(f"  Open on this computer:  http://localhost:{args.port}")
@@ -428,6 +563,9 @@ def main():
     )
     print(f"  Camera endpoint:        POST /api/drop   ({tokenNote})")
     print(f"  Database:               {args.db}\n")
+    if args.app:
+        threading.Thread(target=openAppWindow, args=(f"http://localhost:{args.port}", not args.windowed),
+                         daemon=True).start()  # fmt: skip
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning", timeout_graceful_shutdown=2)
 

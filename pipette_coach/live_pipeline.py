@@ -68,6 +68,7 @@ class LatestFrame:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, int(start_s * (self.cap.get(cv2.CAP_PROP_FPS) or 30.0)))
         self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 30.0
         self.realtime = realtime
+        self.flip: int | None = None  # cv2.flip code for every frame (1 left-right, 0 up-down, -1 both); None = as is
         self.frame, self.idx, self.t = None, -1, 0.0
         self.read_count = 0
         self.done = False
@@ -88,6 +89,8 @@ class LatestFrame:
                 wait = t0 + i / self.fps - time.perf_counter()
                 if wait > 0:
                     time.sleep(wait)
+            if self.flip is not None:  # camera mounted mirrored / upside down: every user of the frame sees it fixed
+                f = cv2.flip(f, self.flip)
             if i == 0:
                 self.size = (f.shape[1], f.shape[0])  # what the camera really sends (it may ignore the asked size)
             with self.cond:

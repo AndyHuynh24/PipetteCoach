@@ -76,3 +76,20 @@ def test_latest_frame_size_is_only_asked_of_cameras(tmp_path):
 def test_stream_urls_are_live_not_files():
     assert is_stream("http://192.168.1.20:8080/video") and is_stream("rtsp://10.0.0.5/live")
     assert not is_stream(0) and not is_stream("data/own/clip.mp4")
+
+
+def test_flip_applies_to_every_later_frame(tmp_path):
+    path = str(tmp_path / "f.mp4")
+    vw = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), 30.0, (64, 48))
+    for _ in range(30):
+        f = np.zeros((48, 64, 3), np.uint8)
+        f[:, :32] = 255  # left half bright
+        vw.write(f)
+    vw.release()
+    cam = LatestFrame(path, realtime=True)
+    cam.flip = 1  # left-right
+    got = cam.next(10)
+    cam.stop()
+    assert got is not None
+    frame = got[2]
+    assert frame[:, 40:].mean() > 200 and frame[:, :24].mean() < 50
